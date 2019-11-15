@@ -44,6 +44,17 @@ equivalent distributions.
 
 ## Running
 
+First, make sure that the 'chum' directory is created in the file server root.
+This is where `chum` writes files. For nginx the directory must be owned by
+`nobody:nobody`.
+
+```
+(nginx) $ mkdir /manta/chum
+(nginx) $ chown nobody:nobody /manta/chum
+```
+
+Getting help:
+
 ```
 $ chum -h
 chum - Upload files to a given file server as quickly as possible
