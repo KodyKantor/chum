@@ -2,6 +2,46 @@
 
 `chum` is a load generator for an individual manta-mako server.
 
+## How it works
+
+`chum` creates a number of threads. Each of these threads will synchronously
+upload files to the target server using an HTTP PUT. The data uploaded is read
+from `/dev/urandom`.
+
+Upload file size distribution is an important part of how `chum` works. `chum`
+includes a default object size distribution if one is not provided at the CLI.
+The CLI option for specifying a file size distribution is `-d`. When a `chum`
+thread uploads a file it will choose a random file size from the provided
+size distribution list. To skew the result of the distribution more of a given
+size should be specified at the CLI.
+
+For example, take the file size distribution [128, 256, 512]. These values are
+interpreted to be kilobytes by default. Over the course of three file upload
+loops a single `chum` thread will choose from this distribution randomly and
+upload files. Maybe the first upload was chosen to be 512k, the second was
+128k, and the third was 512k.
+
+Now let's say that we want to simulate a workload where 80% of uploads are
+128k, and the remaining 20% are 512k and 1m. We can use a distribution like
+[128, 128, 128, 128, 128, 128, 128, 128, 512, 1024]. Assuming the random
+selection is truly random in the limit, 8/10 uploads will be 128k in size,
+1/10 will be 512k in size, and 1/10 will be 1m in size.
+
+There are two ways to specify the previous distribution at the CLI.
+
+Long form:
+```
+-d 128,128,128,128,128,128,128,128,512,1024 
+```
+Short form:
+```
+-d 128x8,512,1024
+```
+
+Using the short form, a given size AxB is interpreted as 'add B copies of
+A to the distribution.' The long and short form examples provided result in
+equivalent distributions.
+
 ## Running
 
 ```
