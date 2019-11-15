@@ -152,13 +152,12 @@ fn main() -> Result<(), Error> {
      * Parse the user's size distribution if one was provided, otherwise use
      * our default distr.
      */
-    let mut distr: Vec<u64>;
-    if matches.opt_present("distribution") {
+    let distr = if matches.opt_present("distribution") {
         let user_distr = matches.opt_str("distribution").unwrap();
-        distr = expand_distribution(user_distr);
+        expand_distribution(user_distr)
     } else {
-        distr = default_distr.to_vec();
-    }
+        default_distr.to_vec()
+    };
 
     if conc < 1 {
         usage(opts, "concurrency must be > 1");
@@ -180,9 +179,8 @@ fn main() -> Result<(), Error> {
     while !vec.is_empty() {
         let hdl = vec.pop();
         if hdl.is_some() {
-            match hdl.unwrap().join() {
-                Err(e) => println!("failed to join thread: {:?}", e),
-                _ => ()
+            if let Err(e) = hdl.unwrap().join() {
+                println!("failed to join therad: {:?}", e);
             }
         }
     }
