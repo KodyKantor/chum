@@ -18,13 +18,25 @@ use std::time;
 use std::vec::Vec;
 use std::fs::File;
 use std::io::Error;
+use std::sync::mpsc::channel;
+use std::sync::mpsc::Sender;
 
 use reqwest::{Client, Body, header::USER_AGENT};
 use getopts::Options;
 use uuid::Uuid;
 
-fn worker(target: &str, distr: &[u64], unit: &str, pause: u64)
-    -> Result<(), Error> {
+struct WorkerResult {
+    id: u32,
+    size: u64,
+}
+
+struct WorkerStat {
+    objs: u64,
+    data: u64, /* either in kb or mb */
+}
+
+fn worker(id: u32, tx: Sender<WorkerResult>, target: &str, distr: &[u64],
+    unit: &str, pause: u64) -> Result<(), Error> {
 
     let mut rng = thread_rng();
 
@@ -35,12 +47,12 @@ fn worker(target: &str, distr: &[u64], unit: &str, pause: u64)
         let fname = Uuid::new_v4();
 
         /* Randomly choose a file size from the list. */
-        let mut fsize = *distr.choose(&mut rng).unwrap();
+        let osize = *distr.choose(&mut rng).unwrap();
 
-        fsize = match unit {
-            "k" => fsize * 1024,
-            "m" => fsize * 1024 * 1024,
-            _ => fsize * 1024,
+        let fsize = match unit {
+            "k" => osize * 1024,
+            "m" => osize * 1024 * 1024,
+            _ => osize * 1024,
         };
 
         /*
@@ -60,7 +72,7 @@ fn worker(target: &str, distr: &[u64], unit: &str, pause: u64)
             println!("upload not successful: {}", resp.status());
         }
 
-        println!("done");
+        tx.send(WorkerResult { id, size: osize }).unwrap();
 
         if pause > 0 {
             thread::sleep(time::Duration::from_millis(pause));
@@ -129,7 +141,7 @@ fn main() -> Result<(), Error> {
         "NUM,NUM,...");
     opts.optopt("u", "unit", format!("capacity unit for upload file \
         size, default: {}", default_unit).as_ref(), "k|m");
-
+    opts.optflag("v", "verbose", "enable per-thread stat reporting");
     opts.optflag("h", "help", "print this help message");
 
     let matches = match opts.parse(&args[1..]) {
@@ -141,6 +153,8 @@ fn main() -> Result<(), Error> {
         usage(opts, "");
         return Ok(())
     }
+
+    let verbose = matches.opt_present("v");
 
     let conc = matches.opt_get_default("concurrency", default_conc)
         .unwrap();
@@ -164,20 +178,96 @@ fn main() -> Result<(), Error> {
         return Ok(())
     }
 
-    let mut vec = Vec::new();
+    let mut workers = Vec::new();
+    let (tx, rx) = channel();
 
-    for _ in 0..conc {
+    for i in 0..conc {
         let targ = target.clone();
         let unit = user_unit.clone();
         let dist = distr.clone();
-        vec.push(thread::spawn(move || {
-            worker(&targ, &dist, &unit, pause)
+
+        let txc = tx.clone();
+        workers.push(thread::spawn(move || {
+            worker(i, txc, &targ, &dist, &unit, pause)
         }));
     }
 
+    /*
+     * This thread reads results off of the channel. This tracks three sets of
+     * stats:
+     * - long term aggregate statistics
+     * - per tick aggregate statistics
+     * - per thread-tick statistics
+     *
+     * Long term aggregated stats are the stats for the entire program's
+     * duration. The throughput stats from each thread are aggregated and added
+     * to create a total.
+     *
+     * Per tick aggregated stats represent the throughput of all of the threads
+     * in aggregate for the last 'tick.'
+     *
+     * Per thread-tick stats represent the throughput of each individual thread
+     * for the last tick. This is only printed when the user provides the '-v'
+     * flag at the CLI.
+     */
+    thread::spawn(move || {
+        let mut agg_totals = WorkerStat { objs: 0, data: 0 };
+        let tick = 2; /* XXX make configurable */
+
+        loop {
+            thread::sleep(time::Duration::from_secs(tick));
+
+            let mut tick_totals = WorkerStat { objs: 0, data: 0 };
+            let mut thread_stats: Vec<WorkerStat> = Vec::new();
+
+            /* Initialize a stat structure for each thread. */
+            for _ in 0..conc {
+                thread_stats.push(WorkerStat { objs: 0, data: 0 });
+            }
+
+            /*
+             * Catch up with the results that worker threads sent while this
+             * thread was sleeping.
+             */
+            for res in rx.try_iter() {
+                if let Some(thread) =
+                    thread_stats.get_mut(res.id as usize) {
+
+                    thread.objs += 1;
+                    thread.data += res.size;
+
+                    tick_totals.objs += 1;
+                    tick_totals.data += res.size;
+
+                    agg_totals.objs += 1;
+                    agg_totals.data += res.size;
+                }
+            }
+
+            /* Print out the stats we gathered. */
+            println!("---");
+            for i in 0..conc {
+                if let Some(worker) =
+                    thread_stats.get_mut(i as usize) {
+
+                    if verbose {
+                        println!("Thread ({}): {} objs, {}{}", i, worker.objs,
+                            worker.data, user_unit);
+                    }
+                    worker.objs = 0;
+                    worker.data = 0;
+                }
+            }
+            println!("Tick ({} threads): {} objs, {}{}", conc,
+                tick_totals.objs, tick_totals.data, user_unit);
+            println!("Total: {} objs, {}{}", agg_totals.objs,
+                agg_totals.data, user_unit);
+        }
+    });
+
     /* Wait for all of the threads to exit. */
-    while !vec.is_empty() {
-        let hdl = vec.pop();
+    while !workers.is_empty() {
+        let hdl = workers.pop();
         if hdl.is_some() {
             if let Err(e) = hdl.unwrap().join() {
                 println!("failed to join therad: {:?}", e);
