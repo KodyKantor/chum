@@ -62,11 +62,12 @@ fn worker(id: u32, tx: Sender<WorkerResult>, target: &str, distr: &[u64],
         let f = File::open("/dev/urandom")?;
         let body = Body::sized(f, fsize);
 
-        let resp = client.put(
+        let req = client.put(
             &format!("http://{}:80/{}/{}", target, dir, fname))
             .header(USER_AGENT, "chum/1.0")
-            .body(body)
-            .send().expect("request builder failed");
+            .body(body);
+
+        let resp = req.send().expect("request failed");
 
         if !resp.status().is_success() {
             println!("upload not successful: {}", resp.status());
@@ -127,11 +128,13 @@ fn main() -> Result<(), Error> {
     let default_pause = 0;
     let default_distr = [128, 256, 512];
     let default_unit = "k".to_string();
+    let default_interval = 2;
 
     let args: Vec<String> = env::args().collect();
     let mut opts = Options::new();
 
     opts.reqopt("t", "target", "target server", "IP");
+
     opts.optopt("c", "concurrency", format!("number of concurrent threads, \
         default: {}", default_conc).as_ref(), "NUM");
     opts.optopt("p", "pause", format!("pause duration in millis between each \
@@ -141,6 +144,9 @@ fn main() -> Result<(), Error> {
         "NUM,NUM,...");
     opts.optopt("u", "unit", format!("capacity unit for upload file \
         size, default: {}", default_unit).as_ref(), "k|m");
+    opts.optopt("i", "interval", format!("interval in seconds at which to \
+        report stats, default: {}", default_interval).as_ref(), "NUM");
+
     opts.optflag("v", "verbose", "enable per-thread stat reporting");
     opts.optflag("h", "help", "print this help message");
 
@@ -156,10 +162,12 @@ fn main() -> Result<(), Error> {
 
     let verbose = matches.opt_present("v");
 
-    let conc = matches.opt_get_default("concurrency", default_conc)
-        .unwrap();
+    let conc = matches.opt_get_default("concurrency", default_conc).unwrap();
     let pause = matches.opt_get_default("pause", default_pause).unwrap();
     let user_unit = matches.opt_get_default("unit", default_unit).unwrap();
+    let interval =
+        matches.opt_get_default("interval", default_interval).unwrap();
+
     let target = matches.opt_str("target").unwrap();
 
     /*
@@ -212,10 +220,9 @@ fn main() -> Result<(), Error> {
      */
     thread::spawn(move || {
         let mut agg_totals = WorkerStat { objs: 0, data: 0 };
-        let tick = 2; /* XXX make configurable */
 
         loop {
-            thread::sleep(time::Duration::from_secs(tick));
+            thread::sleep(time::Duration::from_secs(interval));
 
             let mut tick_totals = WorkerStat { objs: 0, data: 0 };
             let mut thread_stats: Vec<WorkerStat> = Vec::new();
