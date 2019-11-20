@@ -15,10 +15,12 @@ use rand::thread_rng;
 use std::env;
 use std::thread;
 use std::time;
+use std::time::SystemTime;
 use std::vec::Vec;
 use std::fs::File;
 use std::io::Error;
 use std::sync::mpsc::{channel, Sender, Receiver};
+use std::sync::Arc;
 
 use reqwest::{Client, Body, header::USER_AGENT};
 use getopts::Options;
@@ -34,13 +36,12 @@ struct WorkerStat {
     data: u64, /* either in kb or mb */
 }
 
-fn worker(id: u32, tx: Sender<WorkerResult>, target: &str, distr: &[u64],
-    unit: &str, pause: u64) -> Result<(), Error> {
+fn worker(id: u32, tx: Sender<WorkerResult>, client: &Client, target: &str,
+    distr: &[u64], unit: &str, pause: u64) -> Result<(), Error> {
 
     let mut rng = thread_rng();
 
     let dir = "chum"; /* destination directory for uploads */
-    let client = Client::new();
 
     loop {
         let fname = Uuid::new_v4();
@@ -98,10 +99,11 @@ fn worker(id: u32, tx: Sender<WorkerResult>, target: &str, distr: &[u64],
  * for the last tick. This is only printed when the user provides the '-v'
  * flag at the CLI.
  */
-fn collect_stats(rx: Receiver<WorkerResult>, interval: u64, conc: u32,
-    unit: &str, verbose: bool) {
+fn collect_stats(rx: Receiver<WorkerResult>, interval: u64,
+    conc: u32, unit: &str, verbose: bool) {
 
     let mut agg_totals = WorkerStat { objs: 0, data: 0 };
+    let start_time = SystemTime::now();
 
     loop {
         thread::sleep(time::Duration::from_secs(interval));
@@ -147,10 +149,14 @@ fn collect_stats(rx: Receiver<WorkerResult>, interval: u64, conc: u32,
                 worker.data = 0;
             }
         }
+
+        let elapsed_sec = start_time.elapsed().unwrap().as_secs();
         println!("Tick ({} threads): {} objs, {}{}", conc,
             tick_totals.objs, tick_totals.data, unit);
-        println!("Total: {} objs, {}{}", agg_totals.objs,
-            agg_totals.data, unit);
+        println!("Total: {} objs, {}{}, {}s, avg {} objs/s, \
+            avg {} {}/s", agg_totals.objs,
+            agg_totals.data, unit, elapsed_sec, agg_totals.objs / elapsed_sec,
+            agg_totals.data / elapsed_sec, unit);
     }
 }
 
@@ -196,7 +202,7 @@ fn usage(opts: Options, msg: &str) {
     println!("{}", msg);
 }
 
-fn main() -> Result<(), Error> {
+fn main() {
     let default_conc = 1;
     let default_pause = 0;
     let default_distr = [128, 256, 512];
@@ -225,12 +231,12 @@ fn main() -> Result<(), Error> {
 
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => { m }
-        Err(f) => { usage(opts, &f.to_string()); return Ok(()) }
+        Err(f) => { usage(opts, &f.to_string()); return; }
     };
 
     if matches.opt_present("h") {
         usage(opts, "");
-        return Ok(())
+        return;
     }
 
     let verbose = matches.opt_present("v");
@@ -253,31 +259,39 @@ fn main() -> Result<(), Error> {
     } else {
         default_distr.to_vec()
     };
+    /*
+     * In case of very large distributions, let's make the distribution vec
+     * reference counted.
+     */
+    let shared_dist = Arc::new(distr);
 
     if conc < 1 {
         usage(opts, "concurrency must be > 1");
-        return Ok(())
+        return;
     }
 
     let mut workers = Vec::new();
     let (tx, rx) = channel();
+    let client = Client::new();
+
+    /* Kick off statistics collection and reporting. */
+    let stat_unit = user_unit.clone();
+    thread::spawn(move || {
+        collect_stats(rx, interval, conc, &stat_unit, verbose);
+    });
 
     /* Kick off worker threads. */
     for i in 0..conc {
+        let dist = Arc::clone(&shared_dist);
+        let clnt = client.clone(); /* Client uses an Arc under the covers. */
         let targ = target.clone();
         let unit = user_unit.clone();
-        let dist = distr.clone();
         let txc = tx.clone();
 
         workers.push(thread::spawn(move || {
-            worker(i, txc, &targ, &dist, &unit, pause)
+            worker(i, txc, &clnt, &targ, &dist, &unit, pause)
         }));
     }
-
-    /* Kick off statistics collection and reporting. */
-    thread::spawn(move || {
-        collect_stats(rx, interval, conc, &user_unit, verbose);
-    });
 
     /* Wait for all of the threads to exit. */
     while !workers.is_empty() {
@@ -288,5 +302,4 @@ fn main() -> Result<(), Error> {
             }
         }
     }
-    Ok(())
 }
