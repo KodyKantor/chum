@@ -18,8 +18,7 @@ use std::time;
 use std::vec::Vec;
 use std::fs::File;
 use std::io::Error;
-use std::sync::mpsc::channel;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{channel, Sender, Receiver};
 
 use reqwest::{Client, Body, header::USER_AGENT};
 use getopts::Options;
@@ -78,6 +77,80 @@ fn worker(id: u32, tx: Sender<WorkerResult>, target: &str, distr: &[u64],
         if pause > 0 {
             thread::sleep(time::Duration::from_millis(pause));
         }
+    }
+}
+
+/*
+ * This thread reads results off of the channel. This tracks three sets of
+ * stats:
+ * - long term aggregate statistics
+ * - per tick aggregate statistics
+ * - per thread-tick statistics
+ *
+ * Long term aggregated stats are the stats for the entire program's
+ * duration. The throughput stats from each thread are aggregated and added
+ * to create a total.
+ *
+ * Per tick aggregated stats represent the throughput of all of the threads
+ * in aggregate for the last 'tick.'
+ *
+ * Per thread-tick stats represent the throughput of each individual thread
+ * for the last tick. This is only printed when the user provides the '-v'
+ * flag at the CLI.
+ */
+fn collect_stats(rx: Receiver<WorkerResult>, interval: u64, conc: u32,
+    unit: &str, verbose: bool) {
+
+    let mut agg_totals = WorkerStat { objs: 0, data: 0 };
+
+    loop {
+        thread::sleep(time::Duration::from_secs(interval));
+
+        let mut tick_totals = WorkerStat { objs: 0, data: 0 };
+        let mut thread_stats: Vec<WorkerStat> = Vec::new();
+
+        /* Initialize a stat structure for each thread. */
+        for _ in 0..conc {
+            thread_stats.push(WorkerStat { objs: 0, data: 0 });
+        }
+
+        /*
+         * Catch up with the results that worker threads sent while this
+         * thread was sleeping.
+         */
+        for res in rx.try_iter() {
+            if let Some(thread) =
+                thread_stats.get_mut(res.id as usize) {
+
+                thread.objs += 1;
+                thread.data += res.size;
+
+                tick_totals.objs += 1;
+                tick_totals.data += res.size;
+
+                agg_totals.objs += 1;
+                agg_totals.data += res.size;
+            }
+        }
+
+        /* Print out the stats we gathered. */
+        println!("---");
+        for i in 0..conc {
+            if let Some(worker) =
+                thread_stats.get_mut(i as usize) {
+
+                if verbose {
+                    println!("Thread ({}): {} objs, {}{}", i, worker.objs,
+                        worker.data, unit);
+                }
+                worker.objs = 0;
+                worker.data = 0;
+            }
+        }
+        println!("Tick ({} threads): {} objs, {}{}", conc,
+            tick_totals.objs, tick_totals.data, unit);
+        println!("Total: {} objs, {}{}", agg_totals.objs,
+            agg_totals.data, unit);
     }
 }
 
@@ -189,87 +262,21 @@ fn main() -> Result<(), Error> {
     let mut workers = Vec::new();
     let (tx, rx) = channel();
 
+    /* Kick off worker threads. */
     for i in 0..conc {
         let targ = target.clone();
         let unit = user_unit.clone();
         let dist = distr.clone();
-
         let txc = tx.clone();
+
         workers.push(thread::spawn(move || {
             worker(i, txc, &targ, &dist, &unit, pause)
         }));
     }
 
-    /*
-     * This thread reads results off of the channel. This tracks three sets of
-     * stats:
-     * - long term aggregate statistics
-     * - per tick aggregate statistics
-     * - per thread-tick statistics
-     *
-     * Long term aggregated stats are the stats for the entire program's
-     * duration. The throughput stats from each thread are aggregated and added
-     * to create a total.
-     *
-     * Per tick aggregated stats represent the throughput of all of the threads
-     * in aggregate for the last 'tick.'
-     *
-     * Per thread-tick stats represent the throughput of each individual thread
-     * for the last tick. This is only printed when the user provides the '-v'
-     * flag at the CLI.
-     */
+    /* Kick off statistics collection and reporting. */
     thread::spawn(move || {
-        let mut agg_totals = WorkerStat { objs: 0, data: 0 };
-
-        loop {
-            thread::sleep(time::Duration::from_secs(interval));
-
-            let mut tick_totals = WorkerStat { objs: 0, data: 0 };
-            let mut thread_stats: Vec<WorkerStat> = Vec::new();
-
-            /* Initialize a stat structure for each thread. */
-            for _ in 0..conc {
-                thread_stats.push(WorkerStat { objs: 0, data: 0 });
-            }
-
-            /*
-             * Catch up with the results that worker threads sent while this
-             * thread was sleeping.
-             */
-            for res in rx.try_iter() {
-                if let Some(thread) =
-                    thread_stats.get_mut(res.id as usize) {
-
-                    thread.objs += 1;
-                    thread.data += res.size;
-
-                    tick_totals.objs += 1;
-                    tick_totals.data += res.size;
-
-                    agg_totals.objs += 1;
-                    agg_totals.data += res.size;
-                }
-            }
-
-            /* Print out the stats we gathered. */
-            println!("---");
-            for i in 0..conc {
-                if let Some(worker) =
-                    thread_stats.get_mut(i as usize) {
-
-                    if verbose {
-                        println!("Thread ({}): {} objs, {}{}", i, worker.objs,
-                            worker.data, user_unit);
-                    }
-                    worker.objs = 0;
-                    worker.data = 0;
-                }
-            }
-            println!("Tick ({} threads): {} objs, {}{}", conc,
-                tick_totals.objs, tick_totals.data, user_unit);
-            println!("Total: {} objs, {}{}", agg_totals.objs,
-                agg_totals.data, user_unit);
-        }
+        collect_stats(rx, interval, conc, &user_unit, verbose);
     });
 
     /* Wait for all of the threads to exit. */
@@ -277,7 +284,7 @@ fn main() -> Result<(), Error> {
         let hdl = workers.pop();
         if hdl.is_some() {
             if let Err(e) = hdl.unwrap().join() {
-                println!("failed to join therad: {:?}", e);
+                println!("failed to join thread: {:?}", e);
             }
         }
     }
