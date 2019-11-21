@@ -69,6 +69,8 @@ Options:
                         comma-separated distribution of file sizes to upload,
                         default: [128, 256, 512]
     -u, --unit k|m      capacity unit for upload file size, default: k
+    -i, --interval NUM  interval in seconds at which to report stats, default:
+                        2
     -v, --verbose       enable per-thread stat reporting
     -h, --help          print this help message
 ```
