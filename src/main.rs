@@ -6,80 +6,22 @@
  * Copyright 2019 Joyent, Inc.
  */
 
-extern crate reqwest;
 extern crate getopts;
-extern crate uuid;
 
-use rand::seq::SliceRandom;
-use rand::thread_rng;
+mod writer;
+mod worker;
+
 use std::env;
 use std::thread;
 use std::time;
 use std::time::SystemTime;
 use std::vec::Vec;
-use std::fs::File;
-use std::io::Error;
-use std::sync::mpsc::{channel, Sender, Receiver};
-use std::sync::Arc;
+use std::sync::mpsc::{channel, Receiver};
 
-use reqwest::{Client, Body, header::USER_AGENT};
+use crate::writer::Writer;
+use crate::worker::{WorkerResult, WorkerStat};
+
 use getopts::Options;
-use uuid::Uuid;
-
-struct WorkerResult {
-    id: u32,
-    size: u64,
-}
-
-struct WorkerStat {
-    objs: u64,
-    data: u64, /* either in kb or mb */
-}
-
-fn worker(id: u32, tx: Sender<WorkerResult>, client: &Client, target: &str,
-    distr: &[u64], unit: &str, pause: u64) -> Result<(), Error> {
-
-    let mut rng = thread_rng();
-
-    let dir = "chum"; /* destination directory for uploads */
-
-    loop {
-        let fname = Uuid::new_v4();
-
-        /* Randomly choose a file size from the list. */
-        let osize = *distr.choose(&mut rng).unwrap();
-
-        let fsize = match unit {
-            "k" => osize * 1024,
-            "m" => osize * 1024 * 1024,
-            _ => osize * 1024,
-        };
-
-        /*
-         * Obviously sub-optimal having this in the loop. Borrow-checker
-         * struggle in the flesh.
-         */
-        let f = File::open("/dev/urandom")?;
-        let body = Body::sized(f, fsize);
-
-        let req = client.put(
-            &format!("http://{}:80/{}/{}", target, dir, fname))
-            .header(USER_AGENT, "chum/1.0")
-            .body(body);
-
-        let resp = req.send().expect("request failed");
-
-        if !resp.status().is_success() {
-            println!("upload not successful: {}", resp.status());
-        }
-
-        tx.send(WorkerResult { id, size: osize }).unwrap();
-
-        if pause > 0 {
-            thread::sleep(time::Duration::from_millis(pause));
-        }
-    }
-}
 
 /*
  * This thread reads results off of the channel. This tracks three sets of
@@ -241,12 +183,12 @@ fn main() {
 
     let verbose = matches.opt_present("v");
 
+    /* Handle grabbing defaults if the user didn't provide these flags. */
     let conc = matches.opt_get_default("concurrency", default_conc).unwrap();
     let pause = matches.opt_get_default("pause", default_pause).unwrap();
     let user_unit = matches.opt_get_default("unit", default_unit).unwrap();
     let interval =
         matches.opt_get_default("interval", default_interval).unwrap();
-
     let target = matches.opt_str("target").unwrap();
 
     /*
@@ -259,47 +201,26 @@ fn main() {
     } else {
         default_distr.to_vec()
     };
-    /*
-     * In case of very large distributions, let's make the distribution vec
-     * reference counted.
-     */
-    let shared_dist = Arc::new(distr);
 
     if conc < 1 {
         usage(opts, "concurrency must be > 1");
         return;
     }
 
-    let mut workers = Vec::new();
+    /*
+     * Start the real work. Kick off a writer and stat listener.
+     */
+
     let (tx, rx) = channel();
-    let client = Client::new();
+    let writer = Writer::new(conc, tx, target, distr, user_unit.clone(), pause);
+    let writer_thread = thread::spawn(move || { writer.run(); });
 
     /* Kick off statistics collection and reporting. */
     let stat_unit = user_unit.clone();
-    thread::spawn(move || {
+    let stat_thread = thread::spawn(move || {
         collect_stats(rx, interval, conc, &stat_unit, verbose);
     });
 
-    /* Kick off worker threads. */
-    for i in 0..conc {
-        let dist = Arc::clone(&shared_dist);
-        let clnt = client.clone(); /* Client uses an Arc under the covers. */
-        let targ = target.clone();
-        let unit = user_unit.clone();
-        let txc = tx.clone();
-
-        workers.push(thread::spawn(move || {
-            worker(i, txc, &clnt, &targ, &dist, &unit, pause)
-        }));
-    }
-
-    /* Wait for all of the threads to exit. */
-    while !workers.is_empty() {
-        let hdl = workers.pop();
-        if hdl.is_some() {
-            if let Err(e) = hdl.unwrap().join() {
-                println!("failed to join thread: {:?}", e);
-            }
-        }
-    }
+    writer_thread.join().expect("failed to join worker thread");
+    stat_thread.join().expect("failed to join stat thread");
 }
