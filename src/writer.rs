@@ -6,12 +6,13 @@
  * Copyright 2019 Joyent, Inc.
  */
 
-extern crate reqwest;
+extern crate curl;
 extern crate uuid;
 
 use rand::seq::SliceRandom;
 use rand::thread_rng;
 use std::fs::File;
+use std::io::{Read, BufReader};
 use std::sync::{Arc, mpsc::Sender};
 use std::thread;
 use std::time;
@@ -19,7 +20,7 @@ use std::vec::Vec;
 
 use crate::worker::WorkerResult;
 
-use reqwest::{Client, Body, header::USER_AGENT};
+use curl::easy::Easy;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -30,7 +31,6 @@ pub struct Writer {
     distr: Arc<Vec<u64>>,
     unit: String,
     pause: u64,
-    client: Client,
 }
 
 impl Writer {
@@ -44,7 +44,6 @@ impl Writer {
             distr: Arc::new(distr),
             unit,
             pause,
-            client: Client::new(),
         }
     }
 
@@ -77,6 +76,7 @@ impl Writer {
     fn work(&self, id: u32) {
         let mut rng = thread_rng();
         let dir = "chum"; /* destination directory for uploads */
+        let mut client = Easy::new();
 
         loop {
             /* This should be similar to how muskie generates objecids. */
@@ -96,30 +96,34 @@ impl Writer {
              * struggle in the flesh.
              */
             let f = File::open("/dev/urandom").unwrap();
-            let body = Body::sized(f, fsize);
+            let mut reader = BufReader::new(f);
 
-            let req = self.client.put(
-                &format!("http://{}:80/{}/{}", self.target, dir, fname))
-                .header(USER_AGENT, "chum/1.0")
-                .body(body);
+            client.url(&format!(
+                "http://{}:80/{}/{}", self.target, dir, fname)).unwrap();
+            client.put(true).unwrap();
+            client.upload(true).unwrap();
+            client.in_filesize(fsize).unwrap();
+            client.read_function(move |into| {
+                /*
+                 * Fill the buffer that curl hands us. In my tests this is
+                 * always 64k. curl will make sure that the data it sends over
+                 * the connection is limited by 'fsize,' since we set
+                 * in_filesize previously.
+                 */
+                reader.read_exact(into).unwrap();
+                Ok(into.len())
+            }).unwrap();
+            client.perform().unwrap();
 
             /*
-             * Ideally we could do something like req.send().expect(...), but
-             * there appears to be a problem with the reqwest library and
-             * various underlying channels closing unexpectedly. This is easily
-             * reproduced by configuring chum to send 10k files.
-             *
-             * This may be a rust-on-illumos issue, or it may be a problem with
-             * reqwest. Until we can root-cause, let's just swallow the errors
-             * instead of panicking the thread.
+             * We get a 201 when the file is new, and a 204 when a file
+             * is overwritten.
              */
-            if let Ok(resp) = req.send() {
-                if !resp.status().is_success() {
-                    println!("upload not successful: {}", resp.status());
-                }
+            if client.response_code().unwrap() == 201
+                || client.response_code().unwrap() == 204 {
                 self.tx.send(WorkerResult { id, size: osize }).unwrap();
             } else {
-                println!("request builder failed, swallowing error.");
+                println!("request failed: {}", client.response_code().unwrap());
             }
 
             if self.pause > 0 {

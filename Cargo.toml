@@ -5,9 +5,7 @@ authors = ["Kody Kantor <kody@kkantor.com>"]
 edition = "2018"
 
 [dependencies]
-reqwest = "0.9"
 getopts = "0.2"
 rand = "0.6"
 uuid = { version = "0.8", features = ["v4"] }
-serde_json = "1.0"
-serde = "1.0"
+curl = "0.4"
