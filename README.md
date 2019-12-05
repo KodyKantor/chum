@@ -5,8 +5,8 @@
 ## How it works
 
 `chum` creates a number of threads. Each of these threads will synchronously
-upload files to the target server using an HTTP PUT. The data uploaded is read
-from `/dev/urandom`.
+upload files to the target server using an HTTP PUT. The data uploaded is a
+chunk of random bytes.
 
 Upload file size distribution is an important part of how `chum` works. `chum`
 includes a default object size distribution if one is not provided at the CLI.

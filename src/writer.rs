@@ -135,9 +135,19 @@ impl Writer {
              * is overwritten. Everything else is unexpected.
              */
             let code = client.response_code().unwrap();
-            if code == 201
-                || code == 204 {
-                self.tx.send(WorkerResult { id, size: osize }).unwrap();
+            if code == 201 || code == 204 {
+                /*
+                 * XXX want to use .as_secs_f64() or similar once we can move
+                 * to rust 1.38+
+                 */
+                let ttfb = client.starttransfer_time().unwrap().as_millis();
+                let e2e = client.total_time().unwrap().as_millis();
+                self.tx.send(WorkerResult {
+                    id,
+                    size: osize,
+                    ttfb,
+                    e2e,
+                }).unwrap();
             } else {
                 println!("request failed: {}", code);
             }

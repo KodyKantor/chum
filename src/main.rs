@@ -44,18 +44,18 @@ use getopts::Options;
 fn collect_stats(rx: Receiver<WorkerResult>, interval: u64,
     conc: u32, unit: &str, verbose: bool) {
 
-    let mut agg_totals = WorkerStat { objs: 0, data: 0 };
+    let mut agg_totals = WorkerStat::new();
     let start_time = SystemTime::now();
 
     loop {
         thread::sleep(time::Duration::from_secs(interval));
 
-        let mut tick_totals = WorkerStat { objs: 0, data: 0 };
+        let mut tick_totals = WorkerStat::new();
         let mut thread_stats: Vec<WorkerStat> = Vec::new();
 
         /* Initialize a stat structure for each thread. */
         for _ in 0..conc {
-            thread_stats.push(WorkerStat { objs: 0, data: 0 });
+            thread_stats.push(WorkerStat::new());
         }
 
         /*
@@ -66,14 +66,9 @@ fn collect_stats(rx: Receiver<WorkerResult>, interval: u64,
             if let Some(thread) =
                 thread_stats.get_mut(res.id as usize) {
 
-                thread.objs += 1;
-                thread.data += res.size;
-
-                tick_totals.objs += 1;
-                tick_totals.data += res.size;
-
-                agg_totals.objs += 1;
-                agg_totals.data += res.size;
+                thread.add_result(&res);
+                tick_totals.add_result(&res);
+                agg_totals.add_result(&res);
             }
         }
 
@@ -84,17 +79,21 @@ fn collect_stats(rx: Receiver<WorkerResult>, interval: u64,
                 thread_stats.get_mut(i as usize) {
 
                 if verbose {
-                    println!("Thread ({}): {} objs, {}{}", i, worker.objs,
-                        worker.data, unit);
+                    println!("Thread ({}): {} objs, {}{}, {}ms avg ttfb, \
+                        {}ms avg e2e", i, worker.objs, worker.data, unit,
+                        worker.ttfb / worker.objs as u128,
+                        worker.e2e / worker.objs as u128);
                 }
-                worker.objs = 0;
-                worker.data = 0;
+                worker.clear();
             }
         }
 
         let elapsed_sec = start_time.elapsed().unwrap().as_secs();
-        println!("Tick ({} threads): {} objs, {}{}", conc,
-            tick_totals.objs, tick_totals.data, unit);
+        println!("Tick ({} threads): {} objs, {}{}, {}ms avg ttfb, \
+            {}ms avg e2e",
+            conc, tick_totals.objs, tick_totals.data, unit,
+            tick_totals.ttfb / tick_totals.objs as u128,
+            tick_totals.e2e / tick_totals.objs as u128);
         println!("Total: {} objs, {}{}, {}s, avg {} objs/s, \
             avg {} {}/s", agg_totals.objs,
             agg_totals.data, unit, elapsed_sec, agg_totals.objs / elapsed_sec,
