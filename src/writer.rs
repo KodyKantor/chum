@@ -32,24 +32,11 @@ pub struct Writer {
     distr: Arc<Vec<u64>>,       /* object size distribution */
     unit: String,               /* unit of measurement (kb/mb) */
     pause: u64,                 /* time to sleep between uploads */
-    buf: Arc<Vec<u8>>,          /* buffer of random data to send to target */
 }
 
 impl Writer {
     pub fn new(concurrency: u32, tx: Sender<WorkerResult>, target: String,
         distr: Vec<u64>, unit: String, pause: u64) -> Writer {
-
-        /*
-         * Create a random buffer. This is the data that will be sent
-         * to the target server. We share this buffer among all the worker
-         * threads using an Arc.
-         */
-        let mut rng = thread_rng();
-        let mut buf = [0u8; 65536];
-        rng.fill(&mut buf[..]);
-        let arr = buf.as_byte_slice_mut();
-        let mut vec: Vec<u8> = Vec::new();
-        vec.extend_from_slice(arr);
 
         Writer {
             concurrency,
@@ -58,7 +45,6 @@ impl Writer {
             distr: Arc::new(distr),
             unit,
             pause,
-            buf: Arc::new(vec),
         }
     }
 
@@ -90,6 +76,17 @@ impl Writer {
         let mut rng = thread_rng();
         let dir = "chum"; /* destination directory for uploads */
         let mut client = Easy::new();
+
+        /*
+         * Create a random buffer. This is the data that will be sent
+         * to the target server. We share this buffer among all the worker
+         * threads using an Arc.
+         */
+        let mut buf = [0u8; 65536];
+        rng.fill(&mut buf[..]);
+        let arr = buf.as_byte_slice_mut();
+        let mut vec: Vec<u8> = Vec::new();
+        vec.extend_from_slice(arr);
 
         loop {
             /* This should be similar to how muskie generates objectids. */
@@ -124,7 +121,7 @@ impl Writer {
                 let mut transfer = client.transfer();
                 transfer.read_function(|into| {
                     /* This should be memcpy, thus pretty fast. */
-                    into.copy_from_slice(&self.buf);
+                    into.copy_from_slice(&vec);
                     Ok(into.len())
                 }).unwrap();
                 transfer.perform().unwrap();
