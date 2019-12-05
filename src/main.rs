@@ -81,8 +81,8 @@ fn collect_stats(rx: Receiver<WorkerResult>, interval: u64,
                 if verbose {
                     println!("Thread ({}): {} objs, {}{}, {}ms avg ttfb, \
                         {}ms avg e2e", i, worker.objs, worker.data, unit,
-                        worker.ttfb / worker.objs as u128,
-                        worker.e2e / worker.objs as u128);
+                        worker.ttfb / u128::from(worker.objs),
+                        worker.e2e / u128::from(worker.objs));
                 }
                 worker.clear();
             }
@@ -92,8 +92,8 @@ fn collect_stats(rx: Receiver<WorkerResult>, interval: u64,
         println!("Tick ({} threads): {} objs, {}{}, {}ms avg ttfb, \
             {}ms avg e2e",
             conc, tick_totals.objs, tick_totals.data, unit,
-            tick_totals.ttfb / tick_totals.objs as u128,
-            tick_totals.e2e / tick_totals.objs as u128);
+            tick_totals.ttfb / u128::from(tick_totals.objs),
+            tick_totals.e2e / u128::from(tick_totals.objs));
         println!("Total: {} objs, {}{}, {}s, avg {} objs/s, \
             avg {} {}/s", agg_totals.objs,
             agg_totals.data, unit, elapsed_sec, agg_totals.objs / elapsed_sec,
