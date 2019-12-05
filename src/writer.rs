@@ -11,12 +11,13 @@ extern crate uuid;
 
 use rand::seq::SliceRandom;
 use rand::thread_rng;
-use std::fs::File;
-use std::io::{Read, BufReader};
 use std::sync::{Arc, mpsc::Sender};
 use std::thread;
 use std::time;
 use std::vec::Vec;
+
+use rand::Rng;
+use rand::AsByteSliceMut;
 
 use crate::worker::WorkerResult;
 
@@ -25,17 +26,30 @@ use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct Writer {
-    concurrency: u32,
-    tx: Sender<WorkerResult>,
-    target: String,
-    distr: Arc<Vec<u64>>,
-    unit: String,
-    pause: u64,
+    concurrency: u32,           /* number of threads to spin up */
+    tx: Sender<WorkerResult>,   /* channel for progress reporting */
+    target: String,             /* target ip address */
+    distr: Arc<Vec<u64>>,       /* object size distribution */
+    unit: String,               /* unit of measurement (kb/mb) */
+    pause: u64,                 /* time to sleep between uploads */
+    buf: Arc<Vec<u8>>,          /* buffer of random data to send to target */
 }
 
 impl Writer {
     pub fn new(concurrency: u32, tx: Sender<WorkerResult>, target: String,
         distr: Vec<u64>, unit: String, pause: u64) -> Writer {
+
+        /*
+         * Create a random buffer. This is the data that will be sent
+         * to the target server. We share this buffer among all the worker
+         * threads using an Arc.
+         */
+        let mut rng = thread_rng();
+        let mut buf = [0u8; 65536];
+        rng.fill(&mut buf[..]);
+        let arr = buf.as_byte_slice_mut();
+        let mut vec: Vec<u8> = Vec::new();
+        vec.extend_from_slice(arr);
 
         Writer {
             concurrency,
@@ -44,6 +58,7 @@ impl Writer {
             distr: Arc::new(distr),
             unit,
             pause,
+            buf: Arc::new(vec),
         }
     }
 
@@ -56,10 +71,8 @@ impl Writer {
 
         for i in 0..self.concurrency {
             /*
-             * The heaviest things to clone here shouldn't be too bad to clone:
-             * - distr is an Arc, so this will not clone the entire vec.
-             * - client is an Arc under the covers, so a new threadpool is not
-             *   spun up.
+             * The heaviest things to clone here shouldn't be too heavy since
+             * we're using reference counters.
              */
             let worker = self.clone();
             worker_threads.push(thread::spawn(move || worker.work(i)));
@@ -79,7 +92,7 @@ impl Writer {
         let mut client = Easy::new();
 
         loop {
-            /* This should be similar to how muskie generates objecids. */
+            /* This should be similar to how muskie generates objectids. */
             let fname = Uuid::new_v4();
 
             /* Randomly choose a file size from the list. */
@@ -91,39 +104,42 @@ impl Writer {
                 _ => osize * 1024, /* unknown data type - assume 'k.' */
             };
 
-            /*
-             * Obviously sub-optimal having this in the loop. Borrow-checker
-             * struggle in the flesh.
-             */
-            let f = File::open("/dev/urandom").unwrap();
-            let mut reader = BufReader::new(f);
-
             client.url(&format!(
                 "http://{}:80/{}/{}", self.target, dir, fname)).unwrap();
             client.put(true).unwrap();
             client.upload(true).unwrap();
             client.in_filesize(fsize).unwrap();
-            client.read_function(move |into| {
-                /*
-                 * Fill the buffer that curl hands us. In my tests this is
-                 * always 64k. curl will make sure that the data it sends over
-                 * the connection is limited by 'fsize,' since we set
-                 * in_filesize previously.
-                 */
-                reader.read_exact(into).unwrap();
-                Ok(into.len())
-            }).unwrap();
-            client.perform().unwrap();
+
+            /*
+             * Make another scope here to make sure that 'transfer' won't be
+             * able to use anything it borrows once the HTTP request ends.
+             *
+             * This also makes it such that we can re-use 'client' as mutable
+             * after this scope ends, like to get the response status code.
+             *
+             * We don't currently borrow anything and use it again later, but
+             * this might make future-me less frustrated.
+             */
+            {
+                let mut transfer = client.transfer();
+                transfer.read_function(|into| {
+                    /* This should be memcpy, thus pretty fast. */
+                    into.copy_from_slice(&self.buf);
+                    Ok(into.len())
+                }).unwrap();
+                transfer.perform().unwrap();
+            }
 
             /*
              * We get a 201 when the file is new, and a 204 when a file
-             * is overwritten.
+             * is overwritten. Everything else is unexpected.
              */
-            if client.response_code().unwrap() == 201
-                || client.response_code().unwrap() == 204 {
+            let code = client.response_code().unwrap();
+            if code == 201
+                || code == 204 {
                 self.tx.send(WorkerResult { id, size: osize }).unwrap();
             } else {
-                println!("request failed: {}", client.response_code().unwrap());
+                println!("request failed: {}", code);
             }
 
             if self.pause > 0 {
