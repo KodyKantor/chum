@@ -9,17 +9,21 @@
 extern crate getopts;
 
 mod writer;
+mod reader;
 mod worker;
+mod queue;
 
 use std::env;
-use std::thread;
+use std::{thread, thread::JoinHandle};
 use std::time;
 use std::time::SystemTime;
 use std::vec::Vec;
 use std::sync::mpsc::{channel, Receiver};
+use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
 
-use crate::writer::Writer;
-use crate::worker::{WorkerResult, WorkerStat};
+use crate::queue::{Queue, QueueMode};
+use crate::worker::{Worker, WorkerResult, WorkerStat};
 
 use getopts::Options;
 
@@ -40,64 +44,87 @@ use getopts::Options;
  * Per thread-tick stats represent the throughput of each individual thread
  * for the last tick. This is only printed when the user provides the '-v'
  * flag at the CLI.
+ *
+ * All stats are separated by operation (e.g. read, write, etc.).
  */
-fn collect_stats(rx: Receiver<WorkerResult>, interval: u64,
-    conc: u32, unit: &str, verbose: bool) {
+fn collect_stats(rx: Receiver<WorkerResult>, interval: u64, verbose: bool) {
 
-    let mut agg_totals = WorkerStat::new();
+    let mut op_agg = HashMap::new();
     let start_time = SystemTime::now();
 
     loop {
         thread::sleep(time::Duration::from_secs(interval));
 
-        let mut tick_totals = WorkerStat::new();
-        let mut thread_stats: Vec<WorkerStat> = Vec::new();
-
-        /* Initialize a stat structure for each thread. */
-        for _ in 0..conc {
-            thread_stats.push(WorkerStat::new());
-        }
+        let mut op_ticks = HashMap::new();
+        let mut op_stats = HashMap::new();
 
         /*
          * Catch up with the results that worker threads sent while this
          * thread was sleeping.
          */
         for res in rx.try_iter() {
-            if let Some(thread) =
-                thread_stats.get_mut(res.id as usize) {
-
-                thread.add_result(&res);
-                tick_totals.add_result(&res);
-                agg_totals.add_result(&res);
+            if !op_stats.contains_key(&res.op) {
+                op_stats.insert(res.op.clone(), HashMap::new());
             }
+
+            let thread_stats = op_stats.get_mut(&res.op).unwrap();
+            thread_stats.entry(res.id).or_insert_with(WorkerStat::new);
+            thread_stats.get_mut(&res.id).unwrap().add_result(&res);
+
+            if !op_ticks.contains_key(&res.op) {
+                op_ticks.insert(res.op.clone(), WorkerStat::new());
+            }
+            let tick_totals = op_ticks.get_mut(&res.op).unwrap();
+            tick_totals.add_result(&res);
+
+            if !op_agg.contains_key(&res.op) {
+                op_agg.insert(res.op.clone(), WorkerStat::new());
+            }
+            let agg_totals = op_agg.get_mut(&res.op).unwrap();
+            agg_totals.add_result(&res);
         }
 
         /* Print out the stats we gathered. */
         println!("---");
-        for i in 0..conc {
-            if let Some(worker) =
-                thread_stats.get_mut(i as usize) {
+        if verbose {
+            let mut i = 0;
+            for (op, op_map) in op_stats.iter_mut() {
+                println!("Thread ({})", op);
+                for (_, worker) in op_map.iter_mut() {
+                    if worker.objs == 0 {
+                        /*
+                         * don't want to divide by zero when there's
+                         * no activity
+                         */
+                        continue;
+                    }
 
-                if verbose {
-                    println!("Thread ({}): {} objs, {}{}, {}ms avg ttfb, \
-                        {}ms avg e2e", i, worker.objs, worker.data, unit,
-                        worker.ttfb / u128::from(worker.objs),
-                        worker.e2e / u128::from(worker.objs));
+                    println!("\t{}: {}", i, worker.serialize_relative());
+                    worker.clear();
+                    i += 1;
                 }
-                worker.clear();
+                i = 0;
             }
         }
 
-        let elapsed_sec = start_time.elapsed().unwrap().as_secs();
-        println!("Tick ({} threads): {} objs, {}{}, {}ms avg ttfb, \
-            {}ms avg e2e",
-            conc, tick_totals.objs, tick_totals.data, unit,
-            tick_totals.ttfb / u128::from(tick_totals.objs),
-            tick_totals.e2e / u128::from(tick_totals.objs));
-        println!("Total: {} objs, {}{}, {}s, avg {} objs/s, \
-            avg {} {}/s", agg_totals.objs,
-            agg_totals.data, unit, elapsed_sec, agg_totals.objs / elapsed_sec,
-            agg_totals.data / elapsed_sec, unit);
+        for (op, worker) in op_ticks.iter_mut() {
+            print!("Tick ({})", op);
+            if worker.objs == 0 {
+                println!("No activity this tick");
+                continue;
+            }
+            println!("\t{}", worker.serialize_relative());
+        }
+
+        for (op, worker) in op_agg.iter_mut() {
+            print!("Total ({})", op);
+            if worker.objs == 0 {
+                println!("No activity this tick");
+                continue;
+            }
+            let elapsed_sec = start_time.elapsed().unwrap().as_secs();
+            println!("\t{}", worker.serialize_absolute(elapsed_sec));
+        }
     }
 }
 
@@ -149,6 +176,8 @@ fn main() {
     let default_distr = [128, 256, 512];
     let default_unit = "k".to_string();
     let default_interval = 2;
+    let default_mode = "lru".to_string();
+    let default_queue_cap = 1000;
 
     let args: Vec<String> = env::args().collect();
     let mut opts = Options::new();
@@ -166,6 +195,8 @@ fn main() {
         size, default: {}", default_unit).as_ref(), "k|m");
     opts.optopt("i", "interval", format!("interval in seconds at which to \
         report stats, default: {}", default_interval).as_ref(), "NUM");
+    opts.optopt("m", "mode", format!("mode for read operations, default: {}",
+        default_mode).as_ref(), "lru|mru|rand");
 
     opts.optflag("v", "verbose", "enable per-thread stat reporting");
     opts.optflag("h", "help", "print this help message");
@@ -188,6 +219,15 @@ fn main() {
     let user_unit = matches.opt_get_default("unit", default_unit).unwrap();
     let interval =
         matches.opt_get_default("interval", default_interval).unwrap();
+    let qmode =
+        match matches.opt_get_default("mode", default_mode).unwrap().as_ref() {
+
+        "lru" => QueueMode::Lru,
+        "mru" => QueueMode::Mru,
+        "rand" => QueueMode::Rand,
+        _ => QueueMode ::Lru,
+    };
+
     let target = matches.opt_str("target").unwrap();
 
     /*
@@ -207,19 +247,26 @@ fn main() {
     }
 
     /*
-     * Start the real work. Kick off a writer and stat listener.
+     * Start the real work. Kick off worker threads and a stat listener.
      */
 
+    let q = Arc::new(Mutex::new(Queue::new(qmode, default_queue_cap)));
     let (tx, rx) = channel();
-    let writer = Writer::new(conc, tx, target, distr, user_unit.clone(), pause);
-    let writer_thread = thread::spawn(move || { writer.run(); });
+
+    let mut worker_threads: Vec<JoinHandle<_>> = Vec::new();
+    for _ in 0..conc {
+        let mut worker = Worker::new(tx.clone(), target.clone(),
+            distr.clone(), user_unit.clone(), pause, q.clone());
+        worker_threads.push(thread::spawn(move || { worker.work(); }));
+    }
 
     /* Kick off statistics collection and reporting. */
-    let stat_unit = user_unit.clone();
     let stat_thread = thread::spawn(move || {
-        collect_stats(rx, interval, conc, &stat_unit, verbose);
+        collect_stats(rx, interval, verbose);
     });
 
-    writer_thread.join().expect("failed to join worker thread");
+    for hdl in worker_threads {
+        hdl.join().expect("failed to join worker thread");
+    }
     stat_thread.join().expect("failed to join stat thread");
 }
