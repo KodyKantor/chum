@@ -30,14 +30,13 @@ const OP: &str = "write";
 pub struct Writer {
     target: String,             /* target ip address */
     distr: Arc<Vec<u64>>,       /* object size distribution */
-    unit: String,               /* unit of measurement (kb/mb) */
     queue: Arc<Mutex<Queue>>,
     buf: Vec<u8>,
 }
 
 impl Writer {
     pub fn new(target: String, distr: Vec<u64>,
-        unit: String, queue: Arc<Mutex<Queue>>) -> Writer {
+        queue: Arc<Mutex<Queue>>) -> Writer {
 
         let mut rng = thread_rng();
 
@@ -54,14 +53,13 @@ impl Writer {
         Writer {
             target,
             distr: Arc::new(distr),
-            unit,
             queue: Arc::clone(&queue),
             buf: vec,
         }
     }
 }
 
-impl WorkerTask for Writer{
+impl WorkerTask for &Writer {
     fn work(&mut self, client: &mut Easy)
         -> Result<Option<WorkerResult>, Box<dyn Error>> {
 
@@ -71,20 +69,14 @@ impl WorkerTask for Writer{
         let fname = Uuid::new_v4();
 
         /* Randomly choose a file size from the list. */
-        let osize = *self.distr.choose(&mut rng)
+        let size = *self.distr.choose(&mut rng)
             .expect("choosing file size failed");
-
-        let fsize = match self.unit.as_ref() {
-            "k" => osize * 1024,
-            "m" => osize * 1024 * 1024,
-            _ => osize * 1024, /* unknown data type - assume 'k.' */
-        };
 
         client.url(&format!(
             "http://{}:80/{}/{}", self.target, DIR, fname))?;
         client.put(true)?;
         client.upload(true)?;
-        client.in_filesize(fsize)?;
+        client.in_filesize(size)?;
 
         /*
          * Make another scope here to make sure that 'transfer' won't be
@@ -119,11 +111,11 @@ impl WorkerTask for Writer{
             let ttfb = client.starttransfer_time().unwrap().as_millis();
             let e2e = client.total_time().unwrap().as_millis();
 
-            self.queue.lock().unwrap().add(QueueItem{ uuid: fname });
+            self.queue.lock().unwrap().insert(QueueItem{ uuid: fname });
             return Ok(Some(WorkerResult {
                 id: thread::current().id(),
                 op: String::from(OP),
-                size: fsize,
+                size,
                 ttfb,
                 e2e,
             }))
@@ -133,4 +125,6 @@ impl WorkerTask for Writer{
         }
         Ok(None)
     }
+
+    fn get_type(&self) -> String { String::from(OP) }
 }

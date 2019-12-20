@@ -10,7 +10,8 @@ use uuid::Uuid;
 use rand::Rng;
 
 /*
- * Operating modes that the queue supports.
+ * Operating modes that the queue supports. See the block comment above the
+ * Queue impl for an explanation.
  */
 pub enum QueueMode {
     Lru,
@@ -18,9 +19,6 @@ pub enum QueueMode {
     Rand,
 }
 
-/*
- * Description of a queue item.
- */
 pub struct QueueItem {
     pub uuid: Uuid,    
 }
@@ -53,48 +51,47 @@ impl Queue {
         }
     }
 
-    pub fn add(&mut self, qi: QueueItem) {
+    /*
+     * Inserts an item into the queue.
+     * Removes an item if the queue has hit its capacity.
+     */
+    pub fn insert(&mut self, qi: QueueItem) {
         if self.items.len() < self.cap {
             self.items.push(qi);
             return
         }
 
-        match self.mode {
-            QueueMode::Lru => (),
-            QueueMode::Mru => {
-                self.items.remove(0);
-                self.items.push(qi);
-            },
-            QueueMode::Rand => {
-                self.get();
-                self.items.push(qi);
-            },
-
-        }
+        self.remove();
+        self.items.push(qi);
     }
 
     /*
-     * Return an item from the queue. This will also remove the returned item
-     * from the queue.
-     *
+     * Return an item from the queue.
      * Returns None if nothing is in the queue.
      */
-    pub fn get(&mut self) -> Option<QueueItem> {
+    pub fn get(&mut self) -> Option<&QueueItem> {
         if self.items.is_empty() {
             return None
         }
 
         match self.mode {
-            QueueMode::Lru => Some(self.items.remove(0)),
-            QueueMode::Mru => self.items.pop(),
-            QueueMode::Rand => {
-                /*
-                 * Use swap_remove to avoid some copying since we don't care
-                 * about the order of this data.
-                 */
-                Some(self.items.swap_remove(
-                    rand::thread_rng().gen_range(0, self.items.len())))
-            },
+            QueueMode::Lru => self.items.get(0),
+            QueueMode::Mru => self.items.get(self.items.len()),
+            QueueMode::Rand => self.items.get(
+                rand::thread_rng().gen_range(0, self.items.len())),
         }
+    }
+
+    fn remove(&mut self) {
+        if self.items.is_empty() {
+            return
+        }
+
+        match self.mode {
+            QueueMode::Lru => self.items.remove(0),
+            QueueMode::Mru => self.items.remove(0),
+            QueueMode::Rand => self.items.remove(
+                rand::thread_rng().gen_range(0, self.items.len())),
+        };
     }
 }

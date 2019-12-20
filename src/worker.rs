@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, mpsc::Sender};
 use std::{thread, thread::ThreadId};
 use std::time;
 use std::error::Error;
+use rand::{thread_rng, seq::SliceRandom};
 
 use curl::easy::Easy;
 
@@ -19,6 +20,7 @@ use crate::queue::Queue;
 
 pub const DIR: &str = "chum";
 
+#[derive(Debug)]
 pub struct WorkerResult {
     pub id: ThreadId,
     pub op: String, /* e.g. 'read' or 'write' */
@@ -87,6 +89,7 @@ impl WorkerStat {
 pub trait WorkerTask {
     fn work(&mut self, client: &mut Easy)
         -> Result<Option<WorkerResult>, Box<dyn Error>>;
+    fn get_type(&self) -> String;
 }
 
 pub struct Worker {
@@ -95,6 +98,7 @@ pub struct Worker {
     client: Easy,
     tx: Sender<WorkerResult>,
     pause: u64,
+    ops: Vec<String>,
 }
 
 /*
@@ -106,10 +110,10 @@ pub struct Worker {
  */
 impl Worker {
     pub fn new(tx: Sender<WorkerResult>, target: String,
-        distr: Vec<u64>, unit: String, pause: u64,
-        queue: Arc<Mutex<Queue>>) -> Worker {
+        distr: Vec<u64>, pause: u64,
+        queue: Arc<Mutex<Queue>>, ops: Vec<String>) -> Worker {
 
-        let writer = Writer::new(target.clone(), distr, unit,
+        let writer = Writer::new(target.clone(), distr,
             Arc::clone(&queue));
         let reader = Reader::new(target.clone(),
             Arc::clone(&queue));
@@ -120,21 +124,30 @@ impl Worker {
             client: Easy::new(),
             tx,
             pause,
+            ops,
         }
     }
 
     pub fn work(&mut self) {
-        loop {
-            /* For now just unwrap the errors */
-            let res = self.writer.work(&mut self.client).unwrap();
-            if res.is_some() {
-                self.tx.send(res.unwrap()).unwrap();
-            }
-            self.sleep();
+        let mut rng = thread_rng();
 
-            let res = self.reader.work(&mut self.client).unwrap();
-            if res.is_some() {
-                self.tx.send(res.unwrap()).unwrap();
+        loop {
+            { /* Scope so 'operator' doesn't hold an immutable borrow. */
+                let mut operator: Box<WorkerTask> =
+                    match self.ops.choose(&mut rng)
+                    .expect("choosing operation failed").as_ref() {
+
+                    /* XXX we should use something more elegant here. */
+                    "r" => Box::new(&self.reader),
+                    "w" => Box::new(&self.writer),
+                    _ => panic!("unrecognized operator"),
+                };
+
+                /* For now just unwrap the errors */
+                let res = operator.work(&mut self.client).unwrap();
+                if res.is_some() {
+                    self.tx.send(res.unwrap()).unwrap();
+                }
             }
             self.sleep();
         }

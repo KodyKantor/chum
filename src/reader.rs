@@ -29,7 +29,7 @@ impl Reader {
     }
 }
 
-impl WorkerTask for Reader {
+impl WorkerTask for &Reader {
     fn work(&mut self, client: &mut Easy)
         -> Result<Option<WorkerResult>, Box<dyn Error>> {
 
@@ -38,7 +38,8 @@ impl WorkerTask for Reader {
          * for longer than necessary.
          */
         {
-            let qi = self.queue.lock().unwrap().get();
+            let mut q = self.queue.lock().unwrap();
+            let qi = q.get();
             if qi.is_none() {
                 return Ok(None)
             }
@@ -75,4 +76,6 @@ impl WorkerTask for Reader {
         }
         Ok(None)
     }
+
+    fn get_type(&self) -> String { String::from(OP) }
 }

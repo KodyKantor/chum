@@ -35,12 +35,38 @@ Long form:
 ```
 Short form:
 ```
--d 128x8,512,1024
+-d 128:8,512,1024
 ```
 
 Using the short form, a given size AxB is interpreted as 'add B copies of
 A to the distribution.' The long and short form examples provided result in
 equivalent distributions.
+
+Another thing to keep in mind is the ratio of read operations to write
+operations. This is configurable with the `-w` flag and follows the same
+shorthand as the file size distribution argument.
+
+For example, a 50/50 read/write workload is specified like so:
+```
+-w r,w
+```
+and a 80/20 read/write workload could be specified like this:
+```
+-w r:8,w:2
+```
+A read-only workload like so:
+```
+-w r
+```
+and a write-only workload like so:
+```
+-w w
+```
+
+The ID of objects uploaded are added to a queue. IDs are taken from the queue
+whenever a read request is started. The behavior of the queue can be changed to
+simulate a specific workload: LRU, MRU, and random addressing. See the `q`
+argument and queue.rs for more details.
 
 ## Running
 
@@ -63,14 +89,18 @@ Options:
     -t, --target IP     target server
     -c, --concurrency NUM
                         number of concurrent threads, default: 1
-    -p, --pause NUM     pause duration in millis between each upload, default:
+    -s, --sleep NUM     sleep duration in millis between each upload, default:
                         0
-    -d, --distribution NUM,NUM,...
+    -d, --distribution NUM:COUNT,NUM:COUNT,...
                         comma-separated distribution of file sizes to upload,
-                        default: [128, 256, 512]
+                        default: 128,256,512
     -u, --unit k|m      capacity unit for upload file size, default: k
     -i, --interval NUM  interval in seconds at which to report stats, default:
                         2
+    -q, --queue-mode lru|mru|rand
+                        queue mode for read operations, default: rand
+    -w, --workload OP:COUNT,OP:COUNT
+                        workload of operations, default: r,w
     -v, --verbose       enable per-thread stat reporting
     -h, --help          print this help message
 ```
@@ -81,10 +111,10 @@ $ chum -t 127.0.0.1
 ```
 
 Target a local nginx server, 50 worker threads, an object size distribution of
-[1m, 2m, 3m], each thread pausing 1000ms between uploads:
+[1m, 2m, 3m], each thread sleeping 1000ms between uploads:
 
 ```
-$ chum -t 127.0.0.1 -c 50 -d 1,2,3 -u m -p 1000
+$ chum -t 127.0.0.1 -c 50 -d 1,2,3 -u m -s 1000
 ```
 
 ## Building
