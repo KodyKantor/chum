@@ -9,6 +9,10 @@
 use uuid::Uuid;
 use rand::Rng;
 
+use std::str::FromStr;
+use std::error;
+use std::fmt;
+
 /*
  * Operating modes that the queue supports. See the block comment above the
  * Queue impl for an explanation.
@@ -17,6 +21,51 @@ pub enum QueueMode {
     Lru,
     Mru,
     Rand,
+}
+
+#[derive(Debug)]
+pub struct QueueModeError;
+impl error::Error for QueueModeError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        None
+    }
+}
+impl fmt::Display for QueueModeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "invalid queue mode")
+    }
+}
+
+/*
+ * To make calling code cleaner, let users create the QueueMode from a
+ * lowercase str.
+ */
+impl FromStr for QueueMode {
+    type Err = QueueModeError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mode = match s {
+            "lru" => Some(QueueMode::Lru),
+            "mru" => Some(QueueMode::Mru),
+            "rand" => Some(QueueMode::Rand),
+            _ => None,
+        };
+
+        if mode.is_none() {
+            return Err(QueueModeError)
+        }
+        Ok(mode.unwrap())
+    }
+}
+
+impl fmt::Display for QueueMode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let strmode = match self {
+            QueueMode::Lru => "lru",
+            QueueMode::Mru => "mru",
+            QueueMode::Rand => "rand",
+        };
+        write!(f, "{}", strmode)
+    }
 }
 
 pub struct QueueItem {

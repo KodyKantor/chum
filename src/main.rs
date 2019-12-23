@@ -15,12 +15,11 @@ mod queue;
 
 use std::env;
 use std::{thread, thread::JoinHandle};
-use std::time;
-use std::time::SystemTime;
+use std::{time, time::SystemTime};
 use std::vec::Vec;
-use std::sync::mpsc::{channel, Receiver};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc::{channel, Receiver}};
 use std::collections::HashMap;
+use std::error::Error;
 
 use crate::queue::{Queue, QueueMode};
 use crate::worker::{Worker, WorkerResult, WorkerStat};
@@ -33,7 +32,7 @@ const DEF_SLEEP: u64 = 0;
 const DEF_DISTR: &str = "128,256,512";
 const DEF_UNIT: &str = "k";
 const DEF_INTERVAL: u64 = 2;
-const DEF_QUEUE_MODE: &str = "rand";
+const DEF_QUEUE_MODE: QueueMode = QueueMode::Rand;
 const DEF_QUEUE_CAP: usize = 1000;
 const DEF_WORKLOAD: &str = "r,w";
 
@@ -205,7 +204,7 @@ fn usage(opts: Options, msg: &str) {
     println!("{}", msg);
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
     let mut opts = Options::new();
 
@@ -243,7 +242,8 @@ fn main() {
                 "queue-mode",
                 &format!("queue mode for read operations, default: {}",
                     DEF_QUEUE_MODE),
-                "lru|mru|rand");
+                &format!("{}|{}|{}",
+                    QueueMode::Lru, QueueMode::Mru, QueueMode::Rand));
     opts.optopt("w",
                 "workload",
                 &format!("workload of operations, default: {}",
@@ -259,33 +259,22 @@ fn main() {
 
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => { m }
-        Err(f) => { usage(opts, &f.to_string()); return; }
+        Err(f) => { usage(opts, &f.to_string()); return Ok(()); }
     };
 
     if matches.opt_present("h") {
         usage(opts, "");
-        return;
+        return Ok(());
     }
 
     /* Handle grabbing defaults if the user didn't provide these flags. */
-    let conc = matches.opt_get_default("concurrency", DEF_CONCURRENCY).unwrap();
-    let sleep = matches.opt_get_default("sleep", DEF_SLEEP).unwrap();
+    let conc = matches.opt_get_default("concurrency", DEF_CONCURRENCY)?;
+    let sleep = matches.opt_get_default("sleep", DEF_SLEEP)?;
     let unit = matches.opt_get_default("unit",
-        String::from(DEF_UNIT)).unwrap();
+        String::from(DEF_UNIT))?;
     let interval =
-        matches.opt_get_default("interval", DEF_INTERVAL).unwrap();
-    let qmode = match matches.opt_get_default("queue-mode",
-        String::from(DEF_QUEUE_MODE)).unwrap().as_ref() {
-
-        /* XXX implement FromStr for QueueMode. */
-        "lru" => QueueMode::Lru,
-        "mru" => QueueMode::Mru,
-        "rand" => QueueMode::Rand,
-        _ => {
-            println!("unknown queue mode, using '{}'", DEF_QUEUE_MODE);
-            QueueMode::Lru
-        },
-    };
+        matches.opt_get_default("interval", DEF_INTERVAL)?;
+    let qmode = matches.opt_get_default("queue-mode", DEF_QUEUE_MODE)?;
 
     let ops = if matches.opt_present("workload") {
         matches.opt_str("workload").unwrap()
@@ -311,7 +300,7 @@ fn main() {
 
     if conc < 1 {
         usage(opts, "concurrency must be > 1");
-        return;
+        return Ok(())
     }
 
     /*
@@ -337,4 +326,6 @@ fn main() {
         hdl.join().expect("failed to join worker thread");
     }
     stat_thread.join().expect("failed to join stat thread");
+
+    Ok(())
 }
