@@ -25,7 +25,7 @@ use crate::queue::{Queue, QueueItem};
 use curl::easy::Easy;
 use uuid::Uuid;
 
-const OP: &str = "write";
+pub const OP: &str = "write";
 
 pub struct Writer {
     target: String,             /* target ip address */
@@ -109,7 +109,7 @@ impl WorkerTask for &Writer {
              * to rust 1.38+
              */
             let ttfb = client.starttransfer_time().unwrap().as_millis();
-            let e2e = client.total_time().unwrap().as_millis();
+            let rtt = client.total_time().unwrap().as_millis();
 
             self.queue.lock().unwrap().insert(QueueItem{ uuid: fname });
             return Ok(Some(WorkerResult {
@@ -117,7 +117,7 @@ impl WorkerTask for &Writer {
                 op: String::from(OP),
                 size,
                 ttfb,
-                e2e,
+                rtt,
             }))
 
         } else {

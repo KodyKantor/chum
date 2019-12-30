@@ -101,7 +101,7 @@ Options:
                         queue mode for read operations, default: rand
     -w, --workload OP:COUNT,OP:COUNT
                         workload of operations, default: r,w
-    -v, --verbose       enable per-thread stat reporting
+    -f, --format h|v|t  statistics output format, default: h
     -h, --help          print this help message
 ```
 
@@ -116,6 +116,11 @@ Target a local nginx server, 50 worker threads, an object size distribution of
 ```
 $ chum -t 127.0.0.1 -c 50 -d 1,2,3 -u m -s 1000
 ```
+
+Valid values for the `--format` argument:
+- `h` - human readable output
+- `v` - verbose human readable output
+- `t` - computer readable tabular output
 
 ## Building
 

@@ -16,7 +16,7 @@ use curl::easy::Easy;
 use crate::queue::{Queue};
 use crate::worker::{WorkerResult, WorkerTask, DIR};
 
-const OP: &str = "read";
+pub const OP: &str = "read";
 
 pub struct Reader {
     target: String,
@@ -63,13 +63,13 @@ impl WorkerTask for &Reader {
         let code = client.response_code()?;
         if code == 200 {
             let ttfb = client.starttransfer_time()?.as_millis();
-            let e2e = client.total_time()?.as_millis();
+            let rtt = client.total_time()?.as_millis();
             return Ok(Some(WorkerResult {
                 id: thread::current().id(),
                 op: String::from(OP),
                 size: size as u64,
                 ttfb,
-                e2e,
+                rtt,
             }))
         } else {
             println!("request failed: {}", code);

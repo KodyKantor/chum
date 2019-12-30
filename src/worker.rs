@@ -26,7 +26,7 @@ pub struct WorkerResult {
     pub op: String, /* e.g. 'read' or 'write' */
     pub size: u64, /* in bytes */
     pub ttfb: u128, /* millis */
-    pub e2e: u128, /* millis */
+    pub rtt: u128, /* millis */
 }
 
 /*
@@ -36,7 +36,7 @@ pub struct WorkerStat {
     pub objs: u64,
     pub data: u64,
     pub ttfb: u128,
-    pub e2e: u128,
+    pub rtt: u128,
 }
 
 fn bytes_to_human(bytes: u64) -> String {
@@ -50,28 +50,28 @@ impl WorkerStat {
             objs: 0,
             data: 0,
             ttfb: 0,
-            e2e: 0,
+            rtt: 0,
         }
     }
     pub fn add_result(&mut self, res: &WorkerResult) {
         self.objs += 1;
         self.data += res.size;
         self.ttfb += res.ttfb;
-        self.e2e += res.e2e;
+        self.rtt += res.rtt;
     }
 
     pub fn clear(&mut self) {
         self.objs = 0;
         self.data = 0;
         self.ttfb = 0;
-        self.e2e = 0;
+        self.rtt = 0;
     }
 
     /* For easy printing when the caller doesn't care about time. */
     pub fn serialize_relative(&mut self) -> String {
-        format!("{} objects, {}, avg ttfb {}ms, avg e2e {}ms", self.objs,
+        format!("{} objects, {}, avg ttfb {}ms, avg rtt {}ms", self.objs,
             bytes_to_human(self.data), self.ttfb / u128::from(self.objs),
-            self.e2e / u128::from(self.objs))
+            self.rtt / u128::from(self.objs))
     }
 
     /*

@@ -14,8 +14,8 @@ mod worker;
 mod queue;
 
 use std::env;
-use std::{thread, thread::JoinHandle};
-use std::{time, time::SystemTime};
+use std::{thread, thread::JoinHandle, thread::ThreadId};
+use std::{time, time::SystemTime, time::UNIX_EPOCH};
 use std::vec::Vec;
 use std::sync::{Arc, Mutex, mpsc::{channel, Receiver}};
 use std::collections::HashMap;
@@ -26,6 +26,14 @@ use crate::worker::{Worker, WorkerResult, WorkerStat};
 
 use getopts::Options;
 
+#[derive(PartialEq)]
+enum OutputFormat {
+    Human, /* prose, for humans watching the console. */
+    HumanVerbose,
+    Tabular, /* tab-separated, for throwing into something like gnuplot. */
+    Unknown,
+}
+
 /* Default values. */
 const DEF_CONCURRENCY: u32 = 1;
 const DEF_SLEEP: u64 = 0;
@@ -35,6 +43,7 @@ const DEF_INTERVAL: u64 = 2;
 const DEF_QUEUE_MODE: QueueMode = QueueMode::Rand;
 const DEF_QUEUE_CAP: usize = 1000;
 const DEF_WORKLOAD: &str = "r,w";
+const DEF_OUTPUT_FORMAT: &str = "h";
 
 /*
  * This thread reads results off of the channel. This tracks three sets of
@@ -56,7 +65,10 @@ const DEF_WORKLOAD: &str = "r,w";
  *
  * All stats are separated by operation (e.g. read, write, etc.).
  */
-fn collect_stats(rx: Receiver<WorkerResult>, interval: u64, verbose: bool) {
+fn collect_stats(
+    rx: Receiver<WorkerResult>,
+    interval: u64,
+    format: OutputFormat) {
 
     let mut op_agg = HashMap::new();
     let start_time = SystemTime::now();
@@ -93,48 +105,100 @@ fn collect_stats(rx: Receiver<WorkerResult>, interval: u64, verbose: bool) {
             agg_totals.add_result(&res);
         }
 
-        /* Print out the stats we gathered. */
-        println!("---");
-        if verbose {
-            let mut i = 0;
-            for (op, op_map) in op_stats.iter_mut() {
-                println!("Thread ({})", op);
-                for (_, worker) in op_map.iter_mut() {
-                    if worker.objs == 0 {
-                        /*
-                         * don't want to divide by zero when there's
-                         * no activity
-                         */
-                        continue;
-                    }
+        match format {
+            OutputFormat::Human | OutputFormat::HumanVerbose => {
+                print_human(start_time, &format, op_stats, op_ticks,
+                    &mut op_agg)
+            },
+            OutputFormat::Tabular => {
+                print_tabular(start_time, &format, op_stats, op_ticks,
+                    &mut op_agg)
+            },
+            _ => (),
+        }
 
-                    println!("\t{}: {}", i, worker.serialize_relative());
-                    worker.clear();
-                    i += 1;
+    }
+}
+
+fn print_human(
+    start_time: SystemTime,
+    format: &OutputFormat,
+    mut op_stats: HashMap<String, HashMap<ThreadId, WorkerStat>>,
+    mut op_ticks: HashMap<String, WorkerStat>,
+    op_agg: &mut HashMap<String, WorkerStat>) {
+
+    /* Print out the stats we gathered. */
+    println!("---");
+    if *format == OutputFormat::HumanVerbose {
+        let mut i = 0;
+        for (op, op_map) in op_stats.iter_mut() {
+            println!("Thread ({})", op);
+            for (_, worker) in op_map.iter_mut() {
+                if worker.objs == 0 {
+                    /*
+                     * don't want to divide by zero when there's
+                     * no activity
+                     */
+                    continue;
                 }
-                i = 0;
-            }
-        }
 
-        for (op, worker) in op_ticks.iter_mut() {
-            print!("Tick ({})", op);
-            if worker.objs == 0 {
-                println!("No activity this tick");
-                continue;
+                println!("\t{}: {}", i, worker.serialize_relative());
+                worker.clear();
+                i += 1;
             }
-            println!("\t{}", worker.serialize_relative());
-        }
-
-        for (op, worker) in op_agg.iter_mut() {
-            print!("Total ({})", op);
-            if worker.objs == 0 {
-                println!("No activity this tick");
-                continue;
-            }
-            let elapsed_sec = start_time.elapsed().unwrap().as_secs();
-            println!("\t{}", worker.serialize_absolute(elapsed_sec));
+            i = 0;
         }
     }
+
+    for (op, worker) in op_ticks.iter_mut() {
+        print!("Tick ({})", op);
+        if worker.objs == 0 {
+            println!("No activity this tick");
+            continue;
+        }
+        println!("\t{}", worker.serialize_relative());
+    }
+
+    for (op, worker) in op_agg.iter_mut() {
+        print!("Total ({})", op);
+        if worker.objs == 0 {
+            println!("No activity this tick");
+            continue;
+        }
+        let elapsed_sec = start_time.elapsed().unwrap().as_secs();
+        println!("\t{}", worker.serialize_absolute(elapsed_sec));
+    }
+}
+
+fn print_tabular(
+    _: SystemTime,
+    _: &OutputFormat,
+    _: HashMap<String, HashMap<ThreadId, WorkerStat>>,
+    op_ticks: HashMap<String, WorkerStat>,
+    _: &mut HashMap<String, WorkerStat>) {
+
+    let zero_stat = WorkerStat::new();
+    let reader_stats = match op_ticks.get(reader::OP) {
+        Some(stats) => stats,
+        None => &zero_stat,
+    };
+
+    let writer_stats = match op_ticks.get(writer::OP) {
+        Some(stats) => stats,
+        None => &zero_stat,
+    };
+
+    let time = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(time) => format!("{}", time.as_secs()),
+        Err(_) => String::from("0"),
+    };
+
+    println!("{} {} {} {} {} {} {} {} {}",
+        time,
+        reader_stats.objs, writer_stats.objs,
+        reader_stats.data,  writer_stats.data,
+        reader_stats.ttfb, writer_stats.ttfb,
+        reader_stats.rtt, writer_stats.rtt);
 }
 
 /*
@@ -249,10 +313,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 &format!("workload of operations, default: {}",
                     DEF_WORKLOAD),
                 "OP:COUNT,OP:COUNT");
+    opts.optopt("f",
+                 "format",
+                 &format!("statistics output format, default: {}",
+                    DEF_OUTPUT_FORMAT),
+                "h|v|t");
 
-    opts.optflag("v",
-                 "verbose",
-                 "enable per-thread stat reporting");
     opts.optflag("h",
                  "help",
                  "print this help message");
@@ -275,6 +341,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     let interval =
         matches.opt_get_default("interval", DEF_INTERVAL)?;
     let qmode = matches.opt_get_default("queue-mode", DEF_QUEUE_MODE)?;
+    let format = matches.opt_get_default("format",
+        String::from(DEF_OUTPUT_FORMAT))?;
+
+    let format = match format.as_str() {
+        "h" => OutputFormat::Human,
+        "v" => OutputFormat::HumanVerbose,
+        "t" => OutputFormat::Tabular,
+        _ => OutputFormat::Unknown,
+    };
+
+    if format == OutputFormat::Unknown {
+        usage(opts, "unknown output format");
+        return Ok(());
+    }
 
     let ops = if matches.opt_present("workload") {
         matches.opt_str("workload").unwrap()
@@ -284,7 +364,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let ops = expand_distribution(ops);
 
     let target = matches.opt_str("target").unwrap();
-    let verbose = matches.opt_present("v");
 
     /*
      * Parse the user's size distribution if one was provided, otherwise use
@@ -319,7 +398,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     /* Kick off statistics collection and reporting. */
     let stat_thread = thread::spawn(move || {
-        collect_stats(rx, interval, verbose);
+        collect_stats(rx, interval, format);
     });
 
     for hdl in worker_threads {
