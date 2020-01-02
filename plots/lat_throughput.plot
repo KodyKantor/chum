@@ -14,9 +14,10 @@
 # set output
 #
 #
-# Plot time-to-first-byte latency for write requests.
+# Plot round-trip-time latency, time-to-first-byte latency, and throughput of
+# write requests.
 # This assumes an input file named 'chum.out' in the current directory filled
-# with chum's tabular output data.
+# with chum's tabular output data logging on a five-second interval
 #
 unset clip points
 set clip one
@@ -45,13 +46,16 @@ set ttics format "% h"
 set timefmt "%s"
 set angles radians
 set tics back
-unset grid
+set grid nopolar
+set grid xtics nomxtics ytics nomytics noztics nomztics nortics nomrtics \
+ nox2tics nomx2tics noy2tics nomy2tics nocbtics nomcbtics
+set grid layerdefault   lt 0 linecolor 0 linewidth 0.500,  lt 0 linecolor 0 linewidth 0.500
 unset raxis
 set theta counterclockwise right
 set style parallel front  lt black linewidth 2.000 dashtype solid
 set key title "" center
-set key fixed right top vertical Right noreverse enhanced autotitle nobox
-set key noinvert samplen 4 spacing 1 width 0 height 0 
+set key fixed right top vertical Right noreverse enhanced autotitle nobox font ",12"
+set key noinvert samplen 10 spacing 1 width 0 height 0 
 set key maxcolumns 0 maxrows 0
 set key noopaque
 unset label
@@ -113,14 +117,15 @@ set ytics  norangelimit autofreq
 set ztics border in scale 1,0.5 nomirror norotate  autojustify
 set ztics  norangelimit autofreq 
 unset x2tics
-unset y2tics
+set y2tics border in scale 1,0.5 nomirror norotate  autojustify
+set y2tics  norangelimit autofreq 
 set cbtics border in scale 1,0.5 mirror norotate  autojustify
 set cbtics  norangelimit autofreq 
 set rtics axis in scale 1,0.5 nomirror norotate  autojustify
 set rtics  norangelimit autofreq 
 unset ttics
-set title "TTFB Latency over Time (write-only)" 
-set title  font "" norotate
+set title "Chum Mako load test throughput and latency over time" 
+set title  font ",20" norotate
 set timestamp bottom 
 set timestamp "" 
 set timestamp  font "" norotate
@@ -128,15 +133,15 @@ set trange [ * : * ] noreverse nowriteback
 set urange [ * : * ] noreverse nowriteback
 set vrange [ * : * ] noreverse nowriteback
 set xlabel "Time" 
-set xlabel  font "" textcolor lt -1 norotate
+set xlabel  font ",15" textcolor lt -1 norotate
 set x2label "" 
 set x2label  font "" textcolor lt -1 norotate
 set xrange [ * : * ] noreverse writeback
 set x2range [ * : * ] noreverse writeback
-set ylabel "TTFB Latency (milliseconds)" 
-set ylabel  font "" textcolor lt -1 rotate
-set y2label "" 
-set y2label  font "" textcolor lt -1 rotate
+set ylabel "Throughput (MB/s)" 
+set ylabel  font ",15" textcolor lt -1 rotate
+set y2label "latency (ms)" 
+set y2label  font ",15" textcolor lt -1 rotate
 set yrange [ 0.00000 : * ] noreverse writeback
 set y2range [ * : * ] noreverse writeback
 set zlabel "" 
@@ -170,6 +175,7 @@ set fontpath
 set psdir
 set fit brief errorvariables nocovariancevariables errorscaling prescale nowrap v5
 GNUTERM = "qt"
+x = 0.0
 ## Last datafile plotted: "chum.out"
-plot 'chum.out' u 1:($7/1000) t 'chum tick data' w dots
+plot 1/0 w points pt 7 ps 2 lc rgb 'red' t 'throughput', 1/0 w points pt 7 ps 2 lc rgb 'blue' t 'round-trip-time latency', 1/0 w points pt 7 ps 2 lc rgb 'green' t 'time-to-first-byte latency', 'chum.out' u 1:($3/5) notitle w points pt 7 ps 0.1 lc rgb 'red' axes x1y1, '' u 1:($9/1000) notitle w points pt 7 ps 0.1 lc rgb 'blue' axes x1y2, '' u 1:($7/1000) notitle w points pt 7 ps 0.1 lc rgb 'green' axes x1y2
 #    EOF
