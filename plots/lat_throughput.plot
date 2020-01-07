@@ -12,13 +12,6 @@
 #    	immediate help:   type "help"  (plot window: hit 'h')
 # set terminal qt 0 font "Sans,9"
 # set output
-#
-#
-# Plot round-trip-time latency, time-to-first-byte latency, and throughput of
-# write requests.
-# This assumes an input file named 'chum.out' in the current directory filled
-# with chum's tabular output data logging on a five-second interval
-#
 unset clip points
 set clip one
 unset clip two
@@ -48,8 +41,8 @@ set angles radians
 set tics back
 set grid nopolar
 set grid xtics nomxtics ytics nomytics noztics nomztics nortics nomrtics \
- nox2tics nomx2tics noy2tics nomy2tics nocbtics nomcbtics
-set grid layerdefault   lt 0 linecolor 0 linewidth 0.500,  lt 0 linecolor 0 linewidth 0.500
+ nox2tics nomx2tics y2tics nomy2tics nocbtics nomcbtics
+set grid layerdefault   lt 0 linecolor 0 linewidth 0.500 dashtype solid,  lt 0 linecolor 0 linewidth 0.500 dashtype solid
 unset raxis
 set theta counterclockwise right
 set style parallel front  lt black linewidth 2.000 dashtype solid
@@ -177,5 +170,5 @@ set fit brief errorvariables nocovariancevariables errorscaling prescale nowrap 
 GNUTERM = "qt"
 x = 0.0
 ## Last datafile plotted: "chum.out"
-plot 1/0 w points pt 7 ps 2 lc rgb 'red' t 'throughput', 1/0 w points pt 7 ps 2 lc rgb 'blue' t 'round-trip-time latency', 1/0 w points pt 7 ps 2 lc rgb 'green' t 'time-to-first-byte latency', 'chum.out' u 1:($3/5) notitle w points pt 7 ps 0.1 lc rgb 'red' axes x1y1, '' u 1:($9/1000) notitle w points pt 7 ps 0.1 lc rgb 'blue' axes x1y2, '' u 1:($7/1000) notitle w points pt 7 ps 0.1 lc rgb 'green' axes x1y2
+plot 1/0 w points pt 7 ps 2 lc rgb 'red' t 'throughput', 1/0 w points pt 7 ps 2 lc rgb 'blue' t 'round-trip latency', 1/0 w points pt 7 ps 2 lc rgb 'green' t 'time-to-first-byte latency', 'chum.out' u 1:($3/5) notitle w points pt 7 ps 0.1 lc rgb 'red' axes x1y1, '' u 1:($9/$3) notitle w points pt 7 ps 0.1 lc rgb 'blue' axes x1y2, '' u 1:($7/$3) notitle w points     pt 7 ps 0.1 lc rgb 'green' axes x1y2
 #    EOF
