@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
- * Copyright 2019 Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
  */
 
 extern crate getopts;
@@ -12,258 +12,36 @@ mod writer;
 mod reader;
 mod worker;
 mod queue;
+mod utils;
 
 use std::env;
-use std::{thread, thread::JoinHandle, thread::ThreadId};
-use std::{time, time::SystemTime, time::UNIX_EPOCH};
+use std::{thread, thread::JoinHandle};
 use std::vec::Vec;
-use std::sync::{Arc, Mutex, mpsc::{channel, Receiver}};
-use std::collections::HashMap;
+use std::sync::{Arc, Mutex, mpsc::channel, mpsc::Sender};
 use std::error::Error;
 
 use crate::queue::{Queue, QueueMode};
-use crate::worker::{Worker, WorkerResult, WorkerStat};
+use crate::worker::Worker;
+use crate::utils::*;
 
 use getopts::Options;
-
-#[derive(PartialEq)]
-enum OutputFormat {
-    Human, /* prose, for humans watching the console. */
-    HumanVerbose,
-    Tabular, /* tab-separated, for throwing into something like gnuplot. */
-    Unknown,
-}
 
 /* Default values. */
 const DEF_CONCURRENCY: u32 = 1;
 const DEF_SLEEP: u64 = 0;
-const DEF_DISTR: &str = "128,256,512";
-const DEF_UNIT: &str = "k";
+const DEF_DISTR: &str = "128k,256k,512k";
 const DEF_INTERVAL: u64 = 2;
 const DEF_QUEUE_MODE: QueueMode = QueueMode::Rand;
 const DEF_QUEUE_CAP: usize = 1000;
 const DEF_WORKLOAD: &str = "r,w";
 const DEF_OUTPUT_FORMAT: &str = "h";
-
-/*
- * This thread reads results off of the channel. This tracks three sets of
- * stats:
- * - long term aggregate statistics
- * - per tick aggregate statistics
- * - per thread-tick statistics
- *
- * Long term aggregated stats are the stats for the entire program's
- * duration. The throughput stats from each thread are aggregated and added
- * to create a total.
- *
- * Per tick aggregated stats represent the throughput of all of the threads
- * in aggregate for the last 'tick.'
- *
- * Per thread-tick stats represent the throughput of each individual thread
- * for the last tick. This is only printed when the user provides the '-v'
- * flag at the CLI.
- *
- * All stats are separated by operation (e.g. read, write, etc.).
- */
-fn collect_stats(
-    rx: Receiver<WorkerResult>,
-    interval: u64,
-    format: OutputFormat) {
-
-    let mut op_agg = HashMap::new();
-    let start_time = SystemTime::now();
-
-    loop {
-        thread::sleep(time::Duration::from_secs(interval));
-
-        let mut op_ticks = HashMap::new();
-        let mut op_stats = HashMap::new();
-
-        /*
-         * Catch up with the results that worker threads sent while this
-         * thread was sleeping.
-         */
-        for res in rx.try_iter() {
-            if !op_stats.contains_key(&res.op) {
-                op_stats.insert(res.op.clone(), HashMap::new());
-            }
-
-            let thread_stats = op_stats.get_mut(&res.op).unwrap();
-            thread_stats.entry(res.id).or_insert_with(WorkerStat::new);
-            thread_stats.get_mut(&res.id).unwrap().add_result(&res);
-
-            if !op_ticks.contains_key(&res.op) {
-                op_ticks.insert(res.op.clone(), WorkerStat::new());
-            }
-            let tick_totals = op_ticks.get_mut(&res.op).unwrap();
-            tick_totals.add_result(&res);
-
-            if !op_agg.contains_key(&res.op) {
-                op_agg.insert(res.op.clone(), WorkerStat::new());
-            }
-            let agg_totals = op_agg.get_mut(&res.op).unwrap();
-            agg_totals.add_result(&res);
-        }
-
-        match format {
-            OutputFormat::Human | OutputFormat::HumanVerbose => {
-                print_human(start_time, &format, op_stats, op_ticks,
-                    &mut op_agg)
-            },
-            OutputFormat::Tabular => {
-                print_tabular(start_time, &format, op_stats, op_ticks,
-                    &mut op_agg)
-            },
-            _ => (),
-        }
-
-    }
-}
-
-fn print_human(
-    start_time: SystemTime,
-    format: &OutputFormat,
-    mut op_stats: HashMap<String, HashMap<ThreadId, WorkerStat>>,
-    mut op_ticks: HashMap<String, WorkerStat>,
-    op_agg: &mut HashMap<String, WorkerStat>) {
-
-    /* Print out the stats we gathered. */
-    println!("---");
-    if *format == OutputFormat::HumanVerbose {
-        let mut i = 0;
-        for (op, op_map) in op_stats.iter_mut() {
-            println!("Thread ({})", op);
-            for (_, worker) in op_map.iter_mut() {
-                if worker.objs == 0 {
-                    /*
-                     * don't want to divide by zero when there's
-                     * no activity
-                     */
-                    continue;
-                }
-
-                println!("\t{}: {}", i, worker.serialize_relative());
-                worker.clear();
-                i += 1;
-            }
-            i = 0;
-        }
-    }
-
-    for (op, worker) in op_ticks.iter_mut() {
-        print!("Tick ({})", op);
-        if worker.objs == 0 {
-            println!("No activity this tick");
-            continue;
-        }
-        println!("\t{}", worker.serialize_relative());
-    }
-
-    for (op, worker) in op_agg.iter_mut() {
-        print!("Total ({})", op);
-        if worker.objs == 0 {
-            println!("No activity this tick");
-            continue;
-        }
-        let elapsed_sec = start_time.elapsed().unwrap().as_secs();
-        println!("\t{}", worker.serialize_absolute(elapsed_sec));
-    }
-}
-
-fn print_tabular(
-    _: SystemTime,
-    _: &OutputFormat,
-    _: HashMap<String, HashMap<ThreadId, WorkerStat>>,
-    op_ticks: HashMap<String, WorkerStat>,
-    _: &mut HashMap<String, WorkerStat>) {
-
-    let zero_stat = WorkerStat::new();
-    let reader_stats = match op_ticks.get(reader::OP) {
-        Some(stats) => stats,
-        None => &zero_stat,
-    };
-
-    let writer_stats = match op_ticks.get(writer::OP) {
-        Some(stats) => stats,
-        None => &zero_stat,
-    };
-
-    let time = match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(time) => format!("{}", time.as_secs()),
-        Err(_) => String::from("0"),
-    };
-
-    println!("{} {} {} {} {} {} {} {} {}",
-        time,
-        reader_stats.objs, writer_stats.objs,
-        reader_stats.data,  writer_stats.data,
-        reader_stats.ttfb, writer_stats.ttfb,
-        reader_stats.rtt, writer_stats.rtt);
-}
-
-/*
- * Expand an input string like:
- *   1,2,3
- * into a slice like:
- *   [ 1, 2, 3 ]
- *
- * This allows for a single operator to expand a given entry. For example,
- *   1:3,2,3
- * turns into
- *   [ 1, 1, 1, 2, 3 ]
- *
- * That syntax allows the left-operand to be expanded into right-operand copies.
- * This also works with string prefixes:
- *   r:2,w:2
- * turns into
- *   [ r, r, w, w ]
- */
-fn expand_distribution(dstr: String) -> Vec<String> {
-    let mut gen_distr = Vec::new();
-
-    for s in dstr.split(',') {
-        let tok: Vec<&str> = s.split(':').collect();
-        match tok.len() {
-            1 => gen_distr.push(tok[0].to_string()),
-            2 => {
-                for _ in 0..tok[1].parse::<u32>().unwrap() {
-                    gen_distr.push(tok[0].to_string());
-                }
-            },
-            _ => println!("too many multiples in token: {:?}... ignoring",
-                tok.join(":")),
-        };
-    }
-
-    gen_distr
-}
-
-/*
- * Converts a distribution created by expand_distribution into a Vec of numbers
- * based on the unit size.
- */
-fn convert_numeric_distribution(dstr: Vec<String>, unit: &str) -> Vec<u64> {
-    let mut gen_distr = Vec::new();
-
-    let unit_multiple = match unit {
-        "k" => 1024,
-        "m" => 1024 * 1024,
-        _ => panic!("unknown capacity unit: {}", unit),
-    };
-
-    for s in dstr {
-        gen_distr.push(s.parse::<u64>().unwrap() * unit_multiple);
-    }
-
-    gen_distr
-}
+const DEF_DATA_CAP: &str = "0";
 
 fn usage(opts: Options, msg: &str) {
-    let prog = "chum";
     let synopsis = "\
         Upload files to a given file server as quickly as possible";
 
-    let usg = format!("{} - {}", prog, synopsis);
+    let usg = format!("chum - {}", synopsis);
     println!("{}", opts.usage(&usg));
     println!("{}", msg);
 }
@@ -292,11 +70,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 &format!("comma-separated distribution of \
                     file sizes to upload, default: {}", DEF_DISTR),
                 "NUM:COUNT,NUM:COUNT,...");
-    opts.optopt("u",
-                "unit",
-                &format!("capacity unit for upload file \
-                    size, default: {}", DEF_UNIT),
-                "k|m");
     opts.optopt("i",
                 "interval",
                 &format!("interval in seconds at which to \
@@ -318,6 +91,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                  &format!("statistics output format, default: {}",
                     DEF_OUTPUT_FORMAT),
                 "h|v|t");
+    opts.optopt("m",
+                "max-data",
+                &format!("maximum amount of data to write to the target, \
+                    default: {}, '0' disables cap", DEF_DATA_CAP),
+                "CAP");
 
     opts.optflag("h",
                  "help",
@@ -336,8 +114,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     /* Handle grabbing defaults if the user didn't provide these flags. */
     let conc = matches.opt_get_default("concurrency", DEF_CONCURRENCY)?;
     let sleep = matches.opt_get_default("sleep", DEF_SLEEP)?;
-    let unit = matches.opt_get_default("unit",
-        String::from(DEF_UNIT))?;
     let interval =
         matches.opt_get_default("interval", DEF_INTERVAL)?;
     let qmode = matches.opt_get_default("queue-mode", DEF_QUEUE_MODE)?;
@@ -348,20 +124,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         "h" => OutputFormat::Human,
         "v" => OutputFormat::HumanVerbose,
         "t" => OutputFormat::Tabular,
-        _ => OutputFormat::Unknown,
+        _ => {
+            usage(opts, &format!("invalid output format '{}'", format));
+            panic!()
+        },
     };
-
-    if format == OutputFormat::Unknown {
-        usage(opts, "unknown output format");
-        return Ok(());
-    }
 
     let ops = if matches.opt_present("workload") {
         matches.opt_str("workload").unwrap()
     } else {
         String::from(DEF_WORKLOAD)
     };
-    let ops = expand_distribution(ops);
+    let ops = expand_distribution(&ops);
 
     let target = matches.opt_str("target").unwrap();
 
@@ -369,18 +143,29 @@ fn main() -> Result<(), Box<dyn Error>> {
      * Parse the user's size distribution if one was provided, otherwise use
      * our default distr.
      */
-    let distr = if matches.opt_present("distribution") {
+    let user_distr = if matches.opt_present("distribution") {
         matches.opt_str("distribution").unwrap()
     } else {
         String::from(DEF_DISTR)
     };
-    let distr = expand_distribution(distr);
-    let distr = convert_numeric_distribution(distr, &unit);
+
+    let distr = match convert_numeric_distribution(
+        expand_distribution(&user_distr)) {
+        Ok(d) => d,
+        Err(e) => {
+            usage(opts, &format!("invalid distribution argument '{}': {}",
+                user_distr, e.to_string()));
+            panic!()
+        },
+    };
 
     if conc < 1 {
         usage(opts, "concurrency must be > 1");
         return Ok(())
     }
+
+    let data_cap = parse_human(
+        &matches.opt_get_default("max-data", String::from(DEF_DATA_CAP))?)?;
 
     /*
      * Start the real work. Kick off worker threads and a stat listener.
@@ -390,21 +175,33 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (tx, rx) = channel();
 
     let mut worker_threads: Vec<JoinHandle<_>> = Vec::new();
+    let mut worker_chan: Vec<Sender<_>> = Vec::new();
     for _ in 0..conc {
-        let mut worker = Worker::new(tx.clone(), target.clone(),
+        let (sender, signal) = channel();
+        worker_chan.push(sender);
+        let mut worker = Worker::new(signal, tx.clone(), target.clone(),
             distr.clone(), sleep, q.clone(), ops.clone());
         worker_threads.push(thread::spawn(move || { worker.work(); }));
     }
 
     /* Kick off statistics collection and reporting. */
     let stat_thread = thread::spawn(move || {
-        collect_stats(rx, interval, format);
+        collect_stats(rx, interval, format, data_cap);
     });
+
+    stat_thread.join().expect("failed to join stat thread");
+    
+    for sender in worker_chan {
+        match sender.send(()) {
+            Ok(_) => (),
+            Err(e) => println!("problem sending stop signal: {}",
+                e.to_string()),
+        };
+    }
 
     for hdl in worker_threads {
         hdl.join().expect("failed to join worker thread");
     }
-    stat_thread.join().expect("failed to join stat thread");
 
     Ok(())
 }

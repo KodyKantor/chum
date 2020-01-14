@@ -7,5 +7,6 @@ edition = "2018"
 [dependencies]
 getopts = "0.2"
 rand = "0.6"
+regex = "1"
 uuid = { version = "0.8", features = ["v4"] }
 curl = "0.4"

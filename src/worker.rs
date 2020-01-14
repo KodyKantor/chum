@@ -3,14 +3,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
- * Copyright 2019 Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
  */
 
-use std::sync::{Arc, Mutex, mpsc::Sender};
+use std::sync::{Arc, Mutex, mpsc::{Sender, Receiver, TryRecvError}};
 use std::{thread, thread::ThreadId};
 use std::time;
 use std::error::Error;
-use rand::{thread_rng, seq::SliceRandom};
+use rand::prelude::*;
 
 use curl::easy::Easy;
 
@@ -97,6 +97,7 @@ pub struct Worker {
     reader: Reader,
     client: Easy,
     tx: Sender<WorkerResult>,
+    signal: Receiver<()>,
     pause: u64,
     ops: Vec<String>,
 }
@@ -109,7 +110,7 @@ pub struct Worker {
  * into the tx mpsc to get picked up by a statistics listener.
  */
 impl Worker {
-    pub fn new(tx: Sender<WorkerResult>, target: String,
+    pub fn new(signal: Receiver<()>, tx: Sender<WorkerResult>, target: String,
         distr: Vec<u64>, pause: u64,
         queue: Arc<Mutex<Queue>>, ops: Vec<String>) -> Worker {
 
@@ -123,6 +124,7 @@ impl Worker {
             reader,
             client: Easy::new(),
             tx,
+            signal,
             pause,
             ops,
         }
@@ -132,6 +134,13 @@ impl Worker {
         let mut rng = thread_rng();
 
         loop {
+            /* Exit the thread when we receive a signal. */
+            match self.signal.try_recv() {
+                Ok(_) | Err(TryRecvError::Disconnected) => {
+                    return
+                },
+                Err(TryRecvError::Empty) => (),
+            }
             { /* Scope so 'operator' doesn't hold an immutable borrow. */
                 let mut operator: Box<WorkerTask> =
                     match self.ops.choose(&mut rng)
@@ -143,10 +152,17 @@ impl Worker {
                     _ => panic!("unrecognized operator"),
                 };
 
-                /* For now just unwrap the errors */
-                let res = operator.work(&mut self.client).unwrap();
-                if res.is_some() {
-                    self.tx.send(res.unwrap()).unwrap();
+                match operator.work(&mut self.client) {
+                    Ok(val) => if let Some(wr) = val {
+                        match self.tx.send(wr) {
+                            Ok(_) => (),
+                            Err(e) => {
+                                println!(
+                                    "failed to send result: {}", e.to_string())
+                            }
+                        };
+                    },
+                    Err(e) => panic!("worker error: {}", e.to_string()),
                 }
             }
             self.sleep();
