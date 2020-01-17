@@ -102,8 +102,10 @@ Options:
     -f, --format h|v|t  statistics output format, default: h
     -m, --max-data CAP  maximum amount of data to write to the target,
                         default: 0, '0' disables cap
-    -h, --help          print this help message```
+    -h, --help          print this help message
+```
 
+A target is required at a minimum:
 ```
 $ chum -t 127.0.0.1
 ```
