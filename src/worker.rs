@@ -12,8 +12,6 @@ use std::time;
 use std::error::Error;
 use rand::prelude::*;
 
-use curl::easy::Easy;
-
 use crate::writer::Writer;
 use crate::reader::Reader;
 use crate::queue::Queue;
@@ -87,7 +85,7 @@ impl WorkerStat {
 }
 
 pub trait WorkerTask {
-    fn work(&mut self, client: &mut Easy)
+    fn work(&mut self)
         -> Result<Option<WorkerResult>, Box<dyn Error>>;
     fn get_type(&self) -> String;
 }
@@ -95,7 +93,6 @@ pub trait WorkerTask {
 pub struct Worker {
     writer: Writer,
     reader: Reader,
-    client: Easy,
     tx: Sender<WorkerResult>,
     signal: Receiver<()>,
     pause: u64,
@@ -122,7 +119,6 @@ impl Worker {
         Worker {
             writer,
             reader,
-            client: Easy::new(),
             tx,
             signal,
             pause,
@@ -142,17 +138,17 @@ impl Worker {
                 Err(TryRecvError::Empty) => (),
             }
             { /* Scope so 'operator' doesn't hold an immutable borrow. */
-                let mut operator: Box<WorkerTask> =
+                let mut operator: Box<dyn WorkerTask> =
                     match self.ops.choose(&mut rng)
                     .expect("choosing operation failed").as_ref() {
 
                     /* XXX we should use something more elegant here. */
-                    "r" => Box::new(&self.reader),
-                    "w" => Box::new(&self.writer),
+                    "r" => Box::new(&mut self.reader),
+                    "w" => Box::new(&mut self.writer),
                     _ => panic!("unrecognized operator"),
                 };
 
-                match operator.work(&mut self.client) {
+                match operator.work() {
                     Ok(val) => if let Some(wr) = val {
                         match self.tx.send(wr) {
                             Ok(_) => (),

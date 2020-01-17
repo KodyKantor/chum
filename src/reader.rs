@@ -21,16 +21,21 @@ pub const OP: &str = "read";
 pub struct Reader {
     target: String,
     queue: Arc<Mutex<Queue>>,
+    client: Easy,
 }
 
 impl Reader {
     pub fn new(target: String, queue: Arc<Mutex<Queue>>) -> Reader {
-        Reader { target, queue }
+        Reader {
+            target,
+            queue,
+            client: Easy::new(),
+        }
     }
 }
 
-impl WorkerTask for &Reader {
-    fn work(&mut self, client: &mut Easy)
+impl WorkerTask for &mut Reader {
+    fn work(&mut self)
         -> Result<Option<WorkerResult>, Box<dyn Error>> {
 
         /*
@@ -45,14 +50,14 @@ impl WorkerTask for &Reader {
             }
             let qi = qi.unwrap();
 
-            client.url(&format!("http://{}:80/{}/{}", self.target,
+            self.client.url(&format!("http://{}:80/{}/{}", self.target,
                 DIR, qi.uuid))?;
         }
-        client.get(true)?;
+        self.client.get(true)?;
 
         let mut size = 0;
         {
-            let mut transfer = client.transfer();
+            let mut transfer = self.client.transfer();
             transfer.write_function(|data| {
                 size += data.len();
                 Ok(data.len())
@@ -60,10 +65,10 @@ impl WorkerTask for &Reader {
             transfer.perform()?;
         }
 
-        let code = client.response_code()?;
+        let code = self.client.response_code()?;
         if code == 200 {
-            let ttfb = client.starttransfer_time()?.as_millis();
-            let rtt = client.total_time()?.as_millis();
+            let ttfb = self.client.starttransfer_time()?.as_millis();
+            let rtt = self.client.total_time()?.as_millis();
             return Ok(Some(WorkerResult {
                 id: thread::current().id(),
                 op: String::from(OP),

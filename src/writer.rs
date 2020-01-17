@@ -32,6 +32,7 @@ pub struct Writer {
     distr: Arc<Vec<u64>>,       /* object size distribution */
     queue: Arc<Mutex<Queue>>,
     buf: Vec<u8>,
+    client: Easy,
 }
 
 impl Writer {
@@ -55,12 +56,13 @@ impl Writer {
             distr: Arc::new(distr),
             queue: Arc::clone(&queue),
             buf: vec,
+            client: Easy::new(),
         }
     }
 }
 
-impl WorkerTask for &Writer {
-    fn work(&mut self, client: &mut Easy)
+impl WorkerTask for &mut Writer {
+    fn work(&mut self)
         -> Result<Option<WorkerResult>, Box<dyn Error>> {
 
         let mut rng = thread_rng();
@@ -72,27 +74,28 @@ impl WorkerTask for &Writer {
         let size = *self.distr.choose(&mut rng)
             .expect("choosing file size failed");
 
-        client.url(&format!(
+        self.client.url(&format!(
             "http://{}:80/{}/{}", self.target, DIR, fname))?;
-        client.put(true)?;
-        client.upload(true)?;
-        client.in_filesize(size)?;
+        self.client.put(true)?;
+        self.client.upload(true)?;
+        self.client.in_filesize(size)?;
 
         /*
          * Make another scope here to make sure that 'transfer' won't be
          * able to use anything it borrows once the HTTP request ends.
          *
-         * This also allows us to re-use 'client' as mutable
+         * This also allows us to re-use 'self.client' as mutable
          * after this scope ends, like to get the response status code.
          *
          * We don't currently borrow anything and use it again later, but
          * this might make future-me less frustrated.
          */
         {
-            let mut transfer = client.transfer();
-            transfer.read_function(|into| {
+            let mut transfer = self.client.transfer();
+            let buf = &self.buf;
+            transfer.read_function(move |into| {
                 /* This should be memcpy, thus pretty fast. */
-                into.copy_from_slice(&self.buf);
+                into.copy_from_slice(buf);
                 Ok(into.len())
             })?;
             transfer.perform()?;
@@ -102,14 +105,14 @@ impl WorkerTask for &Writer {
          * We get a 201 when the file is new, and a 204 when a file
          * is overwritten. Everything else is unexpected.
          */
-        let code = client.response_code()?;
+        let code = self.client.response_code()?;
         if code == 201 || code == 204 {
             /*
              * XXX want to use .as_secs_f64() or similar once we can move
              * to rust 1.38+
              */
-            let ttfb = client.starttransfer_time().unwrap().as_millis();
-            let rtt = client.total_time().unwrap().as_millis();
+            let ttfb = self.client.starttransfer_time().unwrap().as_millis();
+            let rtt = self.client.total_time().unwrap().as_millis();
 
             self.queue.lock().unwrap().insert(QueueItem{ uuid: fname });
             return Ok(Some(WorkerResult {
