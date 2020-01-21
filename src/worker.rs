@@ -118,11 +118,13 @@ impl Worker {
             Arc::clone(&queue));
         let reader = Reader::new(target.clone(),
             Arc::clone(&queue));
+        let mut client = Easy::new();
+        client.forbid_reuse(true).unwrap();
 
         Worker {
             writer,
             reader,
-            client: Easy::new(),
+            client,
             tx,
             signal,
             pause,
@@ -142,7 +144,7 @@ impl Worker {
                 Err(TryRecvError::Empty) => (),
             }
             { /* Scope so 'operator' doesn't hold an immutable borrow. */
-                let mut operator: Box<WorkerTask> =
+                let mut operator: Box<dyn WorkerTask> =
                     match self.ops.choose(&mut rng)
                     .expect("choosing operation failed").as_ref() {
 
