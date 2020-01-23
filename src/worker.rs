@@ -156,11 +156,11 @@ impl Worker {
                             Ok(_) => (),
                             Err(e) => {
                                 println!(
-                                    "failed to send result: {}", e.to_string())
+                                    "failed to send result: {}", e.to_string());
                             }
                         };
                     },
-                    Err(e) => panic!("worker error: {}", e.to_string()),
+                    Err(e) => println!("worker error: {}", e.to_string()),
                 }
             }
             self.sleep();

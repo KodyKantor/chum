@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
- * Copyright 2019 Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
  */
 
 extern crate curl;
@@ -21,6 +21,7 @@ use rand::AsByteSliceMut;
 
 use crate::worker::{WorkerResult, WorkerTask, DIR};
 use crate::queue::{Queue, QueueItem};
+use crate::utils::ChumError;
 
 use curl::easy::Easy;
 use uuid::Uuid;
@@ -72,6 +73,8 @@ impl WorkerTask for &Writer {
         let size = *self.distr.choose(&mut rng)
             .expect("choosing file size failed");
 
+        let path = format!("{}/{}", DIR, fname);
+
         client.url(&format!(
             "http://{}:80/{}/{}", self.target, DIR, fname))?;
         client.put(true)?;
@@ -111,8 +114,8 @@ impl WorkerTask for &Writer {
             let ttfb = client.starttransfer_time().unwrap().as_millis();
             let rtt = client.total_time().unwrap().as_millis();
 
-            self.queue.lock().unwrap().insert(QueueItem{ uuid: fname });
-            return Ok(Some(WorkerResult {
+            self.queue.lock().unwrap().insert(QueueItem{ obj: path });
+            Ok(Some(WorkerResult {
                 id: thread::current().id(),
                 op: String::from(OP),
                 size,
@@ -121,9 +124,9 @@ impl WorkerTask for &Writer {
             }))
 
         } else {
-            println!("request failed: {}", code);
+            Err(Box::new(ChumError::new(
+                &format!("Writing {} failed: {}", path, code))))
         }
-        Ok(None)
     }
 
     fn get_type(&self) -> String { String::from(OP) }

@@ -8,7 +8,6 @@
 extern crate regex;
 
 use regex::Regex;
-use uuid::Uuid;
 
 use std::error::Error;
 use std::{thread, thread::ThreadId};
@@ -196,27 +195,27 @@ fn print_tabular(
 }
 
 #[derive(Debug)]
-pub struct UtilError {
+pub struct ChumError {
     msg: String,
 }
-impl UtilError {
+impl ChumError {
     pub fn new(msg: &str) -> Self {
-        UtilError { msg: msg.to_string() }
+        ChumError { msg: msg.to_string() }
     }
 }
-impl Error for UtilError {
+impl Error for ChumError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         None
     }
 }
-impl std::fmt::Display for UtilError {
+impl std::fmt::Display for ChumError {
         fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
             write!(f, "{}", self.msg)
         }
 }
 
 /* Convert a human-readable string (e.g. '4k') to bytes (e.g. '4096'). */
-pub fn parse_human(val: &str) -> Result<u64, UtilError> {
+pub fn parse_human(val: &str) -> Result<u64, ChumError> {
     let k = 1024;
     let m = k * 1024;
     let g = m * 1024;
@@ -230,7 +229,7 @@ pub fn parse_human(val: &str) -> Result<u64, UtilError> {
         let (first, last) = val.split_at(val.len() - 1);
         let val_as_bytes: u64 =
             u64::from_str_radix(first, 10).map_err(|err| {
-                UtilError::new(&err.to_string())
+                ChumError::new(&err.to_string())
             })?;
 
         match last.to_ascii_lowercase().as_ref() {
@@ -238,10 +237,10 @@ pub fn parse_human(val: &str) -> Result<u64, UtilError> {
             "m" => Ok(val_as_bytes * m),
             "g" => Ok(val_as_bytes * g),
             "t" => Ok(val_as_bytes * t),
-            _ => Err(UtilError::new("unrecognized unit suffix")),
+            _ => Err(ChumError::new("unrecognized unit suffix")),
         }
     } else {
-        Err(UtilError::new("provided value must be a number with a unit \
+        Err(ChumError::new("provided value must be a number with a unit \
             suffix"))
     }
 }
@@ -288,7 +287,7 @@ pub fn expand_distribution(dstr: &str) -> Vec<String> {
  * based on the unit size.
  */
 pub fn convert_numeric_distribution(dstr: Vec<String>)
-    -> Result<Vec<u64>, UtilError> {
+    -> Result<Vec<u64>, ChumError> {
 
     let mut gen_distr = Vec::new();
 
@@ -309,35 +308,28 @@ pub fn convert_numeric_distribution(dstr: Vec<String>)
  * specified).
  *
  * The default errors we get from the OS and the uuid crate are pretty plain, so
- * we wrap them in a more helpful UtilError.
+ * we wrap them in a more helpful ChumError.
  */
 pub fn populate_queue(queue: Arc<Mutex<Queue>>, readlist: String)
-    -> Result<(), UtilError> {
+    -> Result<(), ChumError> {
 
     let file = File::open(readlist).map_err(|e| {
-        UtilError::new(&format!("failed to open read listing file: {}",
+        ChumError::new(&format!("failed to open read listing file: {}",
             e.to_string()))
     })?;
     let br = BufReader::new(file);
 
     let mut q = queue.lock().unwrap();
-    for uuidstr in br.lines() {
-        let uuidstr: String = match uuidstr {
+    for pathstr in br.lines() {
+        let pathstr: String = match pathstr {
             Ok(x) => x,
             Err(_) => {
-                return Err(UtilError::new(
+                return Err(ChumError::new(
                     "failed to read line from read listing file"))
             },
         };
 
-        let uuid = match Uuid::parse_str(uuidstr.as_ref()) {
-            Ok(x) => x,
-            Err(_) => {
-                return Err(UtilError::new(&format!("failed to parse '{}' \
-                    from listing file as a uuid", uuidstr)));
-            },
-        };
-        q.insert(QueueItem{ uuid });
+        q.insert(QueueItem{ obj: pathstr });
     }
 
     Ok(())

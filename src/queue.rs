@@ -3,10 +3,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
- * Copyright 2019 Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
  */
 
-use uuid::Uuid;
 use rand::Rng;
 
 use std::str::FromStr;
@@ -69,7 +68,7 @@ impl fmt::Display for QueueMode {
 }
 
 pub struct QueueItem {
-    pub uuid: Uuid,    
+    pub obj: String,
 }
 
 pub struct Queue {

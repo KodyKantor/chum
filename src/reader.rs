@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
- * Copyright 2019 Joyent, Inc.
+ * Copyright 2020 Joyent, Inc.
  */
 
 extern crate curl;
@@ -14,7 +14,8 @@ use std::thread;
 
 use curl::easy::Easy;
 use crate::queue::{Queue};
-use crate::worker::{WorkerResult, WorkerTask, DIR};
+use crate::worker::{WorkerResult, WorkerTask};
+use crate::utils::ChumError;
 
 pub const OP: &str = "read";
 
@@ -33,6 +34,7 @@ impl WorkerTask for &Reader {
     fn work(&mut self, client: &mut Easy)
         -> Result<Option<WorkerResult>, Box<dyn Error>> {
 
+        let path: String;
         /*
          * Create a scope here to ensure that we don't keep the queue locked
          * for longer than necessary.
@@ -45,8 +47,8 @@ impl WorkerTask for &Reader {
             }
             let qi = qi.unwrap();
 
-            client.url(&format!("http://{}:80/{}/{}", self.target,
-                DIR, qi.uuid))?;
+            path = qi.obj.clone();
+            client.url(&format!("http://{}:80/{}", self.target, path))?;
         }
         client.get(true)?;
 
@@ -64,7 +66,7 @@ impl WorkerTask for &Reader {
         if code == 200 {
             let ttfb = client.starttransfer_time()?.as_millis();
             let rtt = client.total_time()?.as_millis();
-            return Ok(Some(WorkerResult {
+            Ok(Some(WorkerResult {
                 id: thread::current().id(),
                 op: String::from(OP),
                 size: size as u64,
@@ -72,9 +74,9 @@ impl WorkerTask for &Reader {
                 rtt,
             }))
         } else {
-            println!("request failed: {}", code);
+            Err(Box::new(ChumError::new(
+                &format!("Reading {} failed: {}", path, code))))
         }
-        Ok(None)
     }
 
     fn get_type(&self) -> String { String::from(OP) }
