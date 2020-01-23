@@ -32,7 +32,7 @@ const DEF_SLEEP: u64 = 0;
 const DEF_DISTR: &str = "128k,256k,512k";
 const DEF_INTERVAL: u64 = 2;
 const DEF_QUEUE_MODE: QueueMode = QueueMode::Rand;
-const DEF_QUEUE_CAP: usize = 1000;
+const DEF_QUEUE_CAP: usize = 1000000;
 const DEF_WORKLOAD: &str = "r,w";
 const DEF_OUTPUT_FORMAT: &str = "h";
 const DEF_DATA_CAP: &str = "0";
@@ -96,14 +96,22 @@ fn main() -> Result<(), Box<dyn Error>> {
                 &format!("maximum amount of data to write to the target, \
                     default: {}, '0' disables cap", DEF_DATA_CAP),
                 "CAP");
+    opts.optopt("r",
+                "read-list",
+                "path to a file listing files to read from server, \
+                    default: none (files are chosen from recent uploads)",
+                "FILE");
 
     opts.optflag("h",
                  "help",
                  "print this help message");
 
     let matches = match opts.parse(&args[1..]) {
-        Ok(m) => { m }
-        Err(f) => { usage(opts, &f.to_string()); return Ok(()); }
+        Ok(m) => m,
+        Err(f) => {
+            usage(opts, &f.to_string());
+            return Ok(())
+        },
     };
 
     if matches.opt_present("h") {
@@ -126,7 +134,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "t" => OutputFormat::Tabular,
         _ => {
             usage(opts, &format!("invalid output format '{}'", format));
-            panic!()
+            return Ok(())
         },
     };
 
@@ -136,6 +144,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         String::from(DEF_WORKLOAD)
     };
     let ops = expand_distribution(&ops);
+
+    let q = Arc::new(Mutex::new(Queue::new(qmode, DEF_QUEUE_CAP)));
+
+    if matches.opt_present("read-list") {
+        let readlist = matches.opt_str("read-list").unwrap();
+        match populate_queue(q.clone(), readlist) {
+            Ok(_) => (),
+            Err(e) => {
+                usage(opts, &e.to_string());
+                return Ok(())
+            }
+        }
+    }
 
     let target = matches.opt_str("target").unwrap();
 
@@ -155,7 +176,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Err(e) => {
             usage(opts, &format!("invalid distribution argument '{}': {}",
                 user_distr, e.to_string()));
-            panic!()
+            return Ok(())
         },
     };
 
@@ -171,7 +192,6 @@ fn main() -> Result<(), Box<dyn Error>> {
      * Start the real work. Kick off worker threads and a stat listener.
      */
 
-    let q = Arc::new(Mutex::new(Queue::new(qmode, DEF_QUEUE_CAP)));
     let (tx, rx) = channel();
 
     let mut worker_threads: Vec<JoinHandle<_>> = Vec::new();

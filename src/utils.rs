@@ -7,17 +7,21 @@
  */
 extern crate regex;
 
-use std::error::Error;
 use regex::Regex;
+use uuid::Uuid;
 
+use std::error::Error;
 use std::{thread, thread::ThreadId};
 use std::{time, time::SystemTime, time::UNIX_EPOCH};
 use std::vec::Vec;
-use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex, mpsc::Receiver};
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 
 use crate::worker::{WorkerResult, WorkerStat};
 use crate::{reader, writer};
+use crate::queue::{Queue, QueueItem};
 
 #[derive(PartialEq)]
 pub enum OutputFormat {
@@ -192,27 +196,27 @@ fn print_tabular(
 }
 
 #[derive(Debug)]
-pub struct ParseError {
+pub struct UtilError {
     msg: String,
 }
-impl ParseError {
+impl UtilError {
     pub fn new(msg: &str) -> Self {
-        ParseError { msg: msg.to_string() }
+        UtilError { msg: msg.to_string() }
     }
 }
-impl Error for ParseError {
+impl Error for UtilError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         None
     }
 }
-impl std::fmt::Display for ParseError {
+impl std::fmt::Display for UtilError {
         fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-            write!(f, "parse error: {}", self.msg)
+            write!(f, "{}", self.msg)
         }
 }
 
 /* Convert a human-readable string (e.g. '4k') to bytes (e.g. '4096'). */
-pub fn parse_human(val: &str) -> Result<u64, ParseError> {
+pub fn parse_human(val: &str) -> Result<u64, UtilError> {
     let k = 1024;
     let m = k * 1024;
     let g = m * 1024;
@@ -226,7 +230,7 @@ pub fn parse_human(val: &str) -> Result<u64, ParseError> {
         let (first, last) = val.split_at(val.len() - 1);
         let val_as_bytes: u64 =
             u64::from_str_radix(first, 10).map_err(|err| {
-                ParseError::new(&err.to_string())
+                UtilError::new(&err.to_string())
             })?;
 
         match last.to_ascii_lowercase().as_ref() {
@@ -234,10 +238,10 @@ pub fn parse_human(val: &str) -> Result<u64, ParseError> {
             "m" => Ok(val_as_bytes * m),
             "g" => Ok(val_as_bytes * g),
             "t" => Ok(val_as_bytes * t),
-            _ => Err(ParseError::new("unrecognized unit suffix")),
+            _ => Err(UtilError::new("unrecognized unit suffix")),
         }
     } else {
-        Err(ParseError::new("provided value must be a number with a unit \
+        Err(UtilError::new("provided value must be a number with a unit \
             suffix"))
     }
 }
@@ -284,7 +288,7 @@ pub fn expand_distribution(dstr: &str) -> Vec<String> {
  * based on the unit size.
  */
 pub fn convert_numeric_distribution(dstr: Vec<String>)
-    -> Result<Vec<u64>, ParseError> {
+    -> Result<Vec<u64>, UtilError> {
 
     let mut gen_distr = Vec::new();
 
@@ -295,3 +299,46 @@ pub fn convert_numeric_distribution(dstr: Vec<String>)
     Ok(gen_distr)
 }
 
+/*
+ * The user provided the path to a file. This file contains a listing of objects
+ * in the 'chum' namespace that chum should read back.
+ *
+ * This function pulls each of these file names from the listing file and
+ * inserts them into the chum read queue. The read worker will then pull them
+ * off the queue as it normally would (using whatever algorithm the user
+ * specified).
+ *
+ * The default errors we get from the OS and the uuid crate are pretty plain, so
+ * we wrap them in a more helpful UtilError.
+ */
+pub fn populate_queue(queue: Arc<Mutex<Queue>>, readlist: String)
+    -> Result<(), UtilError> {
+
+    let file = File::open(readlist).map_err(|e| {
+        UtilError::new(&format!("failed to open read listing file: {}",
+            e.to_string()))
+    })?;
+    let br = BufReader::new(file);
+
+    let mut q = queue.lock().unwrap();
+    for uuidstr in br.lines() {
+        let uuidstr: String = match uuidstr {
+            Ok(x) => x,
+            Err(_) => {
+                return Err(UtilError::new(
+                    "failed to read line from read listing file"))
+            },
+        };
+
+        let uuid = match Uuid::parse_str(uuidstr.as_ref()) {
+            Ok(x) => x,
+            Err(_) => {
+                return Err(UtilError::new(&format!("failed to parse '{}' \
+                    from listing file as a uuid", uuidstr)));
+            },
+        };
+        q.insert(QueueItem{ uuid });
+    }
+
+    Ok(())
+}

@@ -114,10 +114,8 @@ impl Worker {
         distr: Vec<u64>, pause: u64,
         queue: Arc<Mutex<Queue>>, ops: Vec<String>) -> Worker {
 
-        let writer = Writer::new(target.clone(), distr,
-            Arc::clone(&queue));
-        let reader = Reader::new(target.clone(),
-            Arc::clone(&queue));
+        let writer = Writer::new(target.clone(), distr, Arc::clone(&queue));
+        let reader = Reader::new(target, Arc::clone(&queue));
 
         Worker {
             writer,
@@ -142,7 +140,7 @@ impl Worker {
                 Err(TryRecvError::Empty) => (),
             }
             { /* Scope so 'operator' doesn't hold an immutable borrow. */
-                let mut operator: Box<WorkerTask> =
+                let mut operator: Box<dyn WorkerTask> =
                     match self.ops.choose(&mut rng)
                     .expect("choosing operation failed").as_ref() {
 

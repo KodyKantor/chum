@@ -102,6 +102,9 @@ Options:
     -f, --format h|v|t  statistics output format, default: h
     -m, --max-data CAP  maximum amount of data to write to the target,
                         default: 0, '0' disables cap
+    -r, --read-list FILE
+                        path to a file listing files to read from server,
+                        default: none (files are chosen from recent uploads)
     -h, --help          print this help message
 ```
 
