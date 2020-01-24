@@ -194,7 +194,7 @@ fn print_tabular(
         reader_stats.rtt, writer_stats.rtt);
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ChumError {
     msg: String,
 }
@@ -240,8 +240,8 @@ pub fn parse_human(val: &str) -> Result<u64, ChumError> {
             _ => Err(ChumError::new("unrecognized unit suffix")),
         }
     } else {
-        Err(ChumError::new("provided value must be a number with a unit \
-            suffix"))
+        Err(ChumError::new("provided value must be a positive number with a \
+            unit suffix"))
     }
 }
 
@@ -262,7 +262,7 @@ pub fn parse_human(val: &str) -> Result<u64, ChumError> {
  * turns into
  *   [ r, r, w, w ]
  */
-pub fn expand_distribution(dstr: &str) -> Vec<String> {
+pub fn expand_distribution(dstr: &str) -> Result<Vec<String>, ChumError> {
     let mut gen_distr = Vec::new();
 
     for s in dstr.split(',') {
@@ -270,16 +270,19 @@ pub fn expand_distribution(dstr: &str) -> Vec<String> {
         match tok.len() {
             1 => gen_distr.push(tok[0].to_string()),
             2 => {
-                for _ in 0..tok[1].parse::<u32>().unwrap() {
+                for _ in 0..tok[1].parse::<u32>().map_err(|_| {
+                    ChumError::new(&format!("failed to parse '{}' as a number",
+                        tok[1]))
+                })? {
                     gen_distr.push(tok[0].to_string());
                 }
             },
-            _ => println!("too many multiples in token: {:?}... ignoring",
-                tok.join(":")),
+            _ => return Err(ChumError::new(&format!("too many multiples in \
+                token '{}'", tok.join(":")))),
         };
     }
 
-    gen_distr
+    Ok(gen_distr)
 }
 
 /*
@@ -333,4 +336,70 @@ pub fn populate_queue(queue: Arc<Mutex<Queue>>, readlist: String)
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_human() -> Result<(), ChumError> {
+        assert_eq!(parse_human("4k")?, 4096);
+        assert_eq!(parse_human("1M")?, 1048576);
+        assert_eq!(parse_human("1g")?, 1073741824);
+        assert_eq!(parse_human("1T")?, 1099511627776);
+
+        assert_eq!(parse_human("1Y"), Err(ChumError::new("provided value \
+            must be a positive number with a unit suffix")));
+        assert_eq!(parse_human("1024b"), Err(ChumError::new("provided value \
+            must be a positive number with a unit suffix")));
+        assert_eq!(parse_human("1234"), Err(ChumError::new("provided value \
+            must be a positive number with a unit suffix")));
+
+        assert_eq!(parse_human("-1G"), Err(ChumError::new("provided value \
+            must be a positive number with a unit suffix")));
+        assert_eq!(parse_human("T1"), Err(ChumError::new("provided value \
+            must be a positive number with a unit suffix")));
+        Ok(())
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to multiply with overflow")]
+    fn test_parse_human_panic() {
+        /* Ideally we would handle these cases without panicking */
+        let _ = parse_human("10000000000T");
+    }
+
+    #[test]
+    fn test_expand_distribution() -> Result<(), ChumError> {
+        assert_eq!(expand_distribution("1,2,3")?, vec!["1", "2", "3"]);
+        assert_eq!(expand_distribution("1:2,2:2,3:1")?,
+            vec!["1", "1", "2", "2", "3"]);
+        assert_eq!(expand_distribution("hello:1")?, vec!["hello"]);
+
+        assert_eq!(expand_distribution("1:2:3"),
+            Err(ChumError::new("too many multiples in token '1:2:3'")));
+        assert_eq!(expand_distribution("1:cat"),
+            Err(ChumError::new("failed to parse 'cat' as a number")));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_convert_numeric_distribution() -> Result<(), ChumError> {
+        assert_eq!(convert_numeric_distribution(
+            expand_distribution("1k,2k,3k")?)?, vec![1024, 2048, 3072]);
+
+        assert_eq!(convert_numeric_distribution(
+            expand_distribution("1,2,3")?),
+            Err(ChumError::new("provided value must be a positive number \
+                with a unit suffix")));
+
+        assert_eq!(convert_numeric_distribution(
+            expand_distribution("a,b,c")?),
+            Err(ChumError::new("provided value must be a positive number \
+                with a unit suffix")));
+
+        Ok(())
+    }
 }

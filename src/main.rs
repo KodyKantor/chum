@@ -143,7 +143,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         String::from(DEF_WORKLOAD)
     };
-    let ops = expand_distribution(&ops);
+    let ops = expand_distribution(&ops)?;
 
     let q = Arc::new(Mutex::new(Queue::new(qmode, DEF_QUEUE_CAP)));
 
@@ -171,7 +171,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let distr = match convert_numeric_distribution(
-        expand_distribution(&user_distr)) {
+        expand_distribution(&user_distr)?) {
         Ok(d) => d,
         Err(e) => {
             usage(opts, &format!("invalid distribution argument '{}': {}",
