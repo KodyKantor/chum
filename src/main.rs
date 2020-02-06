@@ -39,7 +39,7 @@ const DEF_DATA_CAP: &str = "0";
 
 fn usage(opts: Options, msg: &str) {
     let synopsis = "\
-        Upload files to a given file server as quickly as possible";
+        Upload files to a given WebDAV server as quickly as possible";
 
     let usg = format!("chum - {}", synopsis);
     println!("{}", opts.usage(&usg));
@@ -209,8 +209,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         collect_stats(rx, interval, format, data_cap);
     });
 
+    /*
+     * When the stat thread exits we know that enough data was written.
+     */
     stat_thread.join().expect("failed to join stat thread");
-    
+
     for sender in worker_chan {
         match sender.send(()) {
             Ok(_) => (),

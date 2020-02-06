@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
-use crate::worker::{WorkerResult, WorkerStat};
+use crate::worker::{WorkerInfo, WorkerStat};
 use crate::{reader, writer};
 use crate::queue::{Queue, QueueItem};
 
@@ -50,7 +50,7 @@ pub enum OutputFormat {
  * All stats are separated by operation (e.g. read, write, etc.).
  */
 pub fn collect_stats(
-    rx: Receiver<WorkerResult>,
+    rx: Receiver<Result<WorkerInfo, ChumError>>,
     interval: u64,
     format: OutputFormat,
     data_cap: u64) {
@@ -70,29 +70,46 @@ pub fn collect_stats(
          * thread was sleeping.
          */
         for res in rx.try_iter() {
-            if res.op == writer::OP {
-                total_bytes_written += res.size;
+            let wr: WorkerInfo;
+            match res {
+                Ok(wi) => wr = wi,
+                Err(e) => {
+                    if format == OutputFormat::HumanVerbose {
+                        println!("{}", e.to_string());
+                    }
+                    wr = WorkerInfo {
+                        id: thread::current().id(),
+                        op: "error".to_string(),
+                        size: 0,
+                        ttfb: 0,
+                        rtt: 0,
+                    }
+                },
             }
 
-            if !op_stats.contains_key(&res.op) {
-                op_stats.insert(res.op.clone(), HashMap::new());
+            if wr.op == writer::OP {
+                total_bytes_written += wr.size;
             }
 
-            let thread_stats = op_stats.get_mut(&res.op).unwrap();
-            thread_stats.entry(res.id).or_insert_with(WorkerStat::new);
-            thread_stats.get_mut(&res.id).unwrap().add_result(&res);
-
-            if !op_ticks.contains_key(&res.op) {
-                op_ticks.insert(res.op.clone(), WorkerStat::new());
+            if !op_stats.contains_key(&wr.op) {
+                op_stats.insert(wr.op.clone(), HashMap::new());
             }
-            let tick_totals = op_ticks.get_mut(&res.op).unwrap();
-            tick_totals.add_result(&res);
 
-            if !op_agg.contains_key(&res.op) {
-                op_agg.insert(res.op.clone(), WorkerStat::new());
+            let thread_stats = op_stats.get_mut(&wr.op).unwrap();
+            thread_stats.entry(wr.id).or_insert_with(WorkerStat::new);
+            thread_stats.get_mut(&wr.id).unwrap().add_result(&wr);
+
+            if !op_ticks.contains_key(&wr.op) {
+                op_ticks.insert(wr.op.clone(), WorkerStat::new());
             }
-            let agg_totals = op_agg.get_mut(&res.op).unwrap();
-            agg_totals.add_result(&res);
+            let tick_totals = op_ticks.get_mut(&wr.op).unwrap();
+            tick_totals.add_result(&wr);
+
+            if !op_agg.contains_key(&wr.op) {
+                op_agg.insert(wr.op.clone(), WorkerStat::new());
+            }
+            let agg_totals = op_agg.get_mut(&wr.op).unwrap();
+            agg_totals.add_result(&wr);
         }
 
         match format {
@@ -135,7 +152,11 @@ fn print_human(
                     continue;
                 }
 
-                println!("\t{}: {}", i, worker.serialize_relative());
+                if op == "error" {
+                    println!("\t{}: {} errors", i, worker.objs);
+                } else {
+                    println!("\t{}: {}", i, worker.serialize_relative());
+                }
                 worker.clear();
                 i += 1;
             }
@@ -149,7 +170,11 @@ fn print_human(
             println!("No activity this tick");
             continue;
         }
-        println!("\t{}", worker.serialize_relative());
+        if op == "error" {
+            println!("\t{} errors", worker.objs);
+        } else {
+            println!("\t{}", worker.serialize_relative());
+        }
     }
 
     for (op, worker) in op_agg.iter_mut() {
@@ -159,7 +184,11 @@ fn print_human(
             continue;
         }
         let elapsed_sec = start_time.elapsed().unwrap().as_secs();
-        println!("\t{}", worker.serialize_absolute(elapsed_sec));
+        if op == "error" {
+            println!("\t{} errors", worker.objs);
+        } else {
+            println!("\t{}", worker.serialize_absolute(elapsed_sec));
+        }
     }
 }
 
@@ -181,17 +210,23 @@ fn print_tabular(
         None => &zero_stat,
     };
 
+    let error_stats = match op_ticks.get("error") {
+        Some(stats) => stats,
+        None => &zero_stat,
+    };
+
     let time = match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(time) => format!("{}", time.as_secs()),
         Err(_) => String::from("0"),
     };
 
-    println!("{} {} {} {} {} {} {} {} {}",
+    println!("{} {} {} {} {} {} {} {} {} {}",
         time,
         reader_stats.objs, writer_stats.objs,
         reader_stats.data,  writer_stats.data,
         reader_stats.ttfb, writer_stats.ttfb,
-        reader_stats.rtt, writer_stats.rtt);
+        reader_stats.rtt, writer_stats.rtt,
+        error_stats.objs);
 }
 
 #[derive(Debug, PartialEq)]

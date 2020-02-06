@@ -17,11 +17,12 @@ use curl::easy::Easy;
 use crate::writer::Writer;
 use crate::reader::Reader;
 use crate::queue::Queue;
+use crate::utils::ChumError;
 
 pub const DIR: &str = "chum";
 
 #[derive(Debug)]
-pub struct WorkerResult {
+pub struct WorkerInfo {
     pub id: ThreadId,
     pub op: String, /* e.g. 'read' or 'write' */
     pub size: u64, /* in bytes */
@@ -30,7 +31,7 @@ pub struct WorkerResult {
 }
 
 /*
- * WorkerResults can be aggregated into WorkerStats.
+ * WorkerInfos can be aggregated into WorkerStats.
  */
 pub struct WorkerStat {
     pub objs: u64,
@@ -53,7 +54,7 @@ impl WorkerStat {
             rtt: 0,
         }
     }
-    pub fn add_result(&mut self, res: &WorkerResult) {
+    pub fn add_result(&mut self, res: &WorkerInfo) {
         self.objs += 1;
         self.data += res.size;
         self.ttfb += res.ttfb;
@@ -88,7 +89,7 @@ impl WorkerStat {
 
 pub trait WorkerTask {
     fn work(&mut self, client: &mut Easy)
-        -> Result<Option<WorkerResult>, Box<dyn Error>>;
+        -> Result<Option<WorkerInfo>, Box<dyn Error>>;
     fn get_type(&self) -> String;
 }
 
@@ -96,7 +97,7 @@ pub struct Worker {
     writer: Writer,
     reader: Reader,
     client: Easy,
-    tx: Sender<WorkerResult>,
+    tx: Sender<Result<WorkerInfo, ChumError>>,
     signal: Receiver<()>,
     pause: u64,
     ops: Vec<String>,
@@ -104,15 +105,15 @@ pub struct Worker {
 
 /*
  * A Worker is something that interacts with a target. It should emit events
- * in the form of a WorkerResult for every operation performed.
+ * in the form of a WorkerInfo for every operation performed.
  *
- * A Worker calls out to WorkerTask implementors and throws their WorkerResult
+ * A Worker calls out to WorkerTask implementors and throws their WorkerInfo
  * into the tx mpsc to get picked up by a statistics listener.
  */
 impl Worker {
-    pub fn new(signal: Receiver<()>, tx: Sender<WorkerResult>, target: String,
-        distr: Vec<u64>, pause: u64,
-        queue: Arc<Mutex<Queue>>, ops: Vec<String>) -> Worker {
+    pub fn new(signal: Receiver<()>, tx: Sender<Result<WorkerInfo, ChumError>>,
+        target: String, distr: Vec<u64>, pause: u64, queue: Arc<Mutex<Queue>>,
+        ops: Vec<String>) -> Worker {
 
         let writer = Writer::new(target.clone(), distr, Arc::clone(&queue));
         let reader = Reader::new(target, Arc::clone(&queue));
@@ -133,12 +134,6 @@ impl Worker {
 
         loop {
             /* Exit the thread when we receive a signal. */
-            match self.signal.try_recv() {
-                Ok(_) | Err(TryRecvError::Disconnected) => {
-                    return
-                },
-                Err(TryRecvError::Empty) => (),
-            }
             { /* Scope so 'operator' doesn't hold an immutable borrow. */
                 let mut operator: Box<dyn WorkerTask> =
                     match self.ops.choose(&mut rng)
@@ -150,17 +145,29 @@ impl Worker {
                     _ => panic!("unrecognized operator"),
                 };
 
+                /*
+                 * Kick off an operation, collect the worker result, and send
+                 * it off through the channel to the stat collector.
+                 */
                 match operator.work(&mut self.client) {
                     Ok(val) => if let Some(wr) = val {
-                        match self.tx.send(wr) {
-                            Ok(_) => (),
-                            Err(e) => {
-                                println!(
-                                    "failed to send result: {}", e.to_string());
-                            }
-                        };
+                        /*
+                         * The other end of this channel is likely no longer
+                         * listening. Even though this worker performed work
+                         * that will not be accounted for, stop the worker.
+                         */
+                        if self.should_stop() {
+                            return;
+                        }
+                        self.send_info(Ok(wr));
                     },
-                    Err(e) => println!("worker error: {}", e.to_string()),
+                    Err(e) => {
+                        if self.should_stop() {
+                            println!("worker error: {}", e.to_string());
+                            return;
+                        }
+                        self.send_info(Err(ChumError::new(&e.to_string())));
+                    }
                 }
             }
             self.sleep();
@@ -170,6 +177,23 @@ impl Worker {
     fn sleep(&mut self) {
         if self.pause > 0 {
             thread::sleep(time::Duration::from_millis(self.pause));
+        }
+    }
+
+    fn send_info(&self, res: Result<WorkerInfo, ChumError>) {
+        match self.tx.send(res) {
+            Ok(_) => (),
+            Err(e) => {
+                panic!(
+                    "failed to send result: {}", e.to_string());
+            }
+        };
+    }
+
+    fn should_stop(&self) -> bool {
+        match self.signal.try_recv() {
+            Ok(_) | Err(TryRecvError::Disconnected) => true,
+            Err(TryRecvError::Empty) => false,
         }
     }
 }

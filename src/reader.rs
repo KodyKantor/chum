@@ -14,7 +14,7 @@ use std::thread;
 
 use curl::easy::Easy;
 use crate::queue::{Queue};
-use crate::worker::{WorkerResult, WorkerTask};
+use crate::worker::{WorkerInfo, WorkerTask};
 use crate::utils::ChumError;
 
 pub const OP: &str = "read";
@@ -32,7 +32,7 @@ impl Reader {
 
 impl WorkerTask for &Reader {
     fn work(&mut self, client: &mut Easy)
-        -> Result<Option<WorkerResult>, Box<dyn Error>> {
+        -> Result<Option<WorkerInfo>, Box<dyn Error>> {
 
         let path: String;
         /*
@@ -66,7 +66,7 @@ impl WorkerTask for &Reader {
         if code == 200 {
             let ttfb = client.starttransfer_time()?.as_millis();
             let rtt = client.total_time()?.as_millis();
-            Ok(Some(WorkerResult {
+            Ok(Some(WorkerInfo {
                 id: thread::current().id(),
                 op: String::from(OP),
                 size: size as u64,

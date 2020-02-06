@@ -19,7 +19,7 @@ use std::thread;
 use rand::Rng;
 use rand::AsByteSliceMut;
 
-use crate::worker::{WorkerResult, WorkerTask, DIR};
+use crate::worker::{WorkerInfo, WorkerTask, DIR};
 use crate::queue::{Queue, QueueItem};
 use crate::utils::ChumError;
 
@@ -62,7 +62,7 @@ impl Writer {
 
 impl WorkerTask for &Writer {
     fn work(&mut self, client: &mut Easy)
-        -> Result<Option<WorkerResult>, Box<dyn Error>> {
+        -> Result<Option<WorkerInfo>, Box<dyn Error>> {
 
         let mut rng = thread_rng();
 
@@ -115,7 +115,7 @@ impl WorkerTask for &Writer {
             let rtt = client.total_time().unwrap().as_millis();
 
             self.queue.lock().unwrap().insert(QueueItem{ obj: path });
-            Ok(Some(WorkerResult {
+            Ok(Some(WorkerInfo {
                 id: thread::current().id(),
                 op: String::from(OP),
                 size,
