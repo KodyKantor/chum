@@ -14,7 +14,7 @@ use std::thread;
 
 use curl::easy::Easy;
 use crate::queue::{Queue};
-use crate::worker::{WorkerInfo, WorkerTask};
+use crate::worker::{WorkerInfo, WorkerTask, WorkerClient};
 use crate::utils::ChumError;
 
 pub const OP: &str = "read";
@@ -28,13 +28,12 @@ impl Reader {
     pub fn new(target: String, queue: Arc<Mutex<Queue>>) -> Reader {
         Reader { target, queue }
     }
-}
 
-impl WorkerTask for &Reader {
-    fn work(&mut self, client: &mut Easy)
+    fn web_dav_download(&self, client: &mut Easy)
         -> Result<Option<WorkerInfo>, Box<dyn Error>> {
 
         let path: String;
+
         /*
          * Create a scope here to ensure that we don't keep the queue locked
          * for longer than necessary.
@@ -76,6 +75,19 @@ impl WorkerTask for &Reader {
         } else {
             Err(Box::new(ChumError::new(
                 &format!("Reading {} failed: {}", path, code))))
+        }
+
+    }
+}
+
+impl WorkerTask for &Reader {
+    fn work(&mut self, client: &mut WorkerClient)
+        -> Result<Option<WorkerInfo>, Box<dyn Error>> {
+
+        match client {
+            WorkerClient::WebDav(easy) => self.web_dav_download(easy),
+            _ => Err(Box::new(ChumError::new("read not implemented for this \
+                protocol"))),
         }
     }
 

@@ -6,6 +6,7 @@
  * Copyright 2020 Joyent, Inc.
  */
 
+use std::env;
 use std::sync::{Arc, Mutex, mpsc::{Sender, Receiver, TryRecvError}};
 use std::{thread, thread::ThreadId};
 use std::time;
@@ -13,6 +14,9 @@ use std::error::Error;
 use rand::prelude::*;
 
 use curl::easy::Easy;
+use rusoto_s3::S3Client;
+use rusoto_core::Region;
+use rusoto_credential::EnvironmentProvider;
 
 use crate::writer::Writer;
 use crate::reader::Reader;
@@ -88,15 +92,20 @@ impl WorkerStat {
 }
 
 pub trait WorkerTask {
-    fn work(&mut self, client: &mut Easy)
+    fn work(&mut self, client: &mut WorkerClient)
         -> Result<Option<WorkerInfo>, Box<dyn Error>>;
     fn get_type(&self) -> String;
+}
+
+pub enum WorkerClient {
+    WebDav(Easy),
+    S3(S3Client),
 }
 
 pub struct Worker {
     writer: Writer,
     reader: Reader,
-    client: Easy,
+    client: WorkerClient,
     tx: Sender<Result<WorkerInfo, ChumError>>,
     signal: Receiver<()>,
     pause: u64,
@@ -115,13 +124,54 @@ impl Worker {
         target: String, distr: Vec<u64>, pause: u64, queue: Arc<Mutex<Queue>>,
         ops: Vec<String>) -> Worker {
 
+        let tok: Vec<&str> = target.split(':').collect();
+        let protocol = tok[0].to_ascii_lowercase(); /* e.g. 's3' or 'webdav'. */
+        let target = tok[1].to_string();
+
         let writer = Writer::new(target.clone(), distr, Arc::clone(&queue));
-        let reader = Reader::new(target, Arc::clone(&queue));
+        let reader = Reader::new(target.clone(), Arc::clone(&queue));
+
+        /*
+         * Construct a client of the given type.
+         *
+         * The S3 client needs a lot more up-front setup vs libcurl. libcurl
+         * keeps around a bunch of global state that we overwrite each time
+         * we use it.
+         */
+        let client = match protocol.as_ref() {
+            "webdav" => WorkerClient::WebDav(Easy::new()),
+            "s3" => {
+                match env::var("AWS_ACCESS_KEY_ID") {
+                    Ok(_) => (),
+                    Err(_) => env::set_var("AWS_ACCESS_KEY_ID", "minioadmin"),
+                }
+
+                match env::var("AWS_SECRET_ACCESS_KEY") {
+                    Ok(_) => (),
+                    Err(_) => env::set_var("AWS_SECRET_ACCESS_KEY",
+                        "minioadmin"),
+                }
+
+                let region = Region::Custom {
+                    name: "chum-s3".to_owned(),
+                    endpoint: format!("http://{}", target.to_owned()),
+                };
+
+                let s3client = S3Client::new_with(
+                    rusoto_core::request::HttpClient::new()
+                        .expect("failed to create S3 HTTP client"),
+                    EnvironmentProvider::default(),
+                    region);
+
+                WorkerClient::S3(s3client)
+            },
+            _ => panic!("unknown client protocol"),
+        };
 
         Worker {
             writer,
             reader,
-            client: Easy::new(),
+            client,
             tx,
             signal,
             pause,

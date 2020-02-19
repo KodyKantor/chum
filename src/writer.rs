@@ -19,7 +19,7 @@ use std::thread;
 use rand::Rng;
 use rand::AsByteSliceMut;
 
-use crate::worker::{WorkerInfo, WorkerTask, DIR};
+use crate::worker::{WorkerInfo, WorkerTask, WorkerClient, DIR};
 use crate::queue::{Queue, QueueItem};
 use crate::utils::ChumError;
 
@@ -58,10 +58,8 @@ impl Writer {
             buf: vec,
         }
     }
-}
 
-impl WorkerTask for &Writer {
-    fn work(&mut self, client: &mut Easy)
+    fn web_dav_upload(&self, client: &mut Easy)
         -> Result<Option<WorkerInfo>, Box<dyn Error>> {
 
         let mut rng = thread_rng();
@@ -127,6 +125,19 @@ impl WorkerTask for &Writer {
             Err(Box::new(ChumError::new(
                 &format!("Writing {} failed: {}", path, code))))
         }
+    }
+}
+
+impl WorkerTask for &Writer {
+    fn work(&mut self, client: &mut WorkerClient)
+        -> Result<Option<WorkerInfo>, Box<dyn Error>> {
+
+        match client {
+            WorkerClient::WebDav(easy) => self.web_dav_upload(easy),
+            _ => Err(Box::new(ChumError::new("write not implemented for this \
+                protocol"))),
+        }
+
     }
 
     fn get_type(&self) -> String { String::from(OP) }
