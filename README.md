@@ -1,12 +1,14 @@
-# chum - mako load generator
+# chum - storage load generator
 
-`chum` is a load generator for an individual manta-mako server.
+`chum` is a load generator for WebDAV or S3 servers.
 
 ## How it works
 
 `chum` creates a number of threads. Each of these threads will synchronously
-upload files to the target server using an HTTP PUT. The data uploaded is a
+upload or download files from the target server. The data uploaded is a
 chunk of random bytes.
+
+`chum` supports the S3 and WebDAV client protocols.
 
 Upload file size distribution is an important part of how `chum` works. `chum`
 includes a default object size distribution if one is not provided at the CLI.
@@ -85,7 +87,8 @@ $ chum -h
 chum - Upload files to a given file server as quickly as possible
 
 Options:
-    -t, --target IP     target server
+    -t, --target [s3|webdav]:IP
+                        target server
     -c, --concurrency NUM
                         number of concurrent threads, default: 1
     -s, --sleep NUM     sleep duration in millis between each upload, default:
@@ -110,15 +113,20 @@ Options:
 
 A target is required at a minimum:
 ```
-$ chum -t 127.0.0.1
+$ chum -t webdav:127.0.0.1
 ```
 
 Target a local nginx server, 50 worker threads, an object size distribution of
 [1m, 2m, 3m], each thread sleeping 1000ms between uploads:
 
 ```
-$ chum -t 127.0.0.1 -c 50 -d 1m,2m,3m -s 1000
+$ chum -t webdav:127.0.0.1 -c 50 -d 1m,2m,3m -s 1000
 ```
+
+`chum` defaults to using port 80 for WebDAV targets and port 9000 for S3
+targets. S3 client credentials default to the MinIO default client creds. These
+can be changed by setting the `AWS_SECRET_ACCESS_KEY` and `AWS_ACCESS_KEY_ID`
+environment variables.
 
 Valid values for the `--format` argument:
 - `h` - human readable output

@@ -24,6 +24,9 @@ use crate::queue::{Queue, QueueItem};
 use crate::utils::ChumError;
 
 use curl::easy::Easy;
+use rusoto_core::RusotoError;
+use rusoto_s3::{S3Client, PutObjectRequest, CreateBucketRequest, S3};
+
 use uuid::Uuid;
 
 pub const OP: &str = "write";
@@ -126,6 +129,94 @@ impl Writer {
                 &format!("Writing {} failed: {}", path, code))))
         }
     }
+
+    /*
+     * Upload an object to the remote endpoint.
+     */
+    fn s3_upload(&self, client: &mut S3Client)
+        -> Result<Option<WorkerInfo>, Box<dyn Error>> {
+
+        /* This should be similar to how muskie generates objectids. */
+        let fname = Uuid::new_v4();
+
+        let mut rng = thread_rng();
+        let size = *self.distr.choose(&mut rng)
+            .expect("choosing file size failed");
+
+        /*
+         * The S3 client library that we're using doesn't have simply
+         * sync-friendly buffered IO support. Here we just create one giant
+         * buffer to send along.
+         */
+        let mut buf: Vec<u8> = Vec::with_capacity(size as usize);
+        let mut bytes_to_go = size;
+        while bytes_to_go > 0 {
+            if bytes_to_go < self.buf.len() as u64 {
+                let tail = &self.buf[0..(bytes_to_go - 1) as usize];
+                buf.extend(tail);
+                break;
+            }
+            buf.extend(&self.buf);
+            bytes_to_go -= self.buf.len() as u64;
+        }
+
+        let pr = PutObjectRequest {
+            bucket: DIR.to_string(),
+            key: fname.to_string(),
+            body: Some(buf.into()),
+            ..Default::default()
+        };
+
+
+
+        /*
+         * For the moment we don't have latency stats for S3 requests. Maybe
+         * we could grab these from the underlying reqwest structures. Or maybe
+         * not.
+         */
+        match client.put_object(pr).sync() {
+            Err(e) => Err(Box::new(e)),
+            Ok(_) => {
+                self.queue.lock().unwrap().insert(
+                    QueueItem{ obj: fname.to_string() }
+                );
+
+                Ok(Some(WorkerInfo {
+                    id: thread::current().id(),
+                    op: String::from(OP),
+                    size,
+                    ttfb: 0,
+                    rtt: 0,
+                }))
+            },
+        }
+    }
+
+    /*
+     * Initial setup of S3 environment.
+     */
+    fn s3_setup(&self, client: &mut S3Client)
+        -> Result<(), Box<dyn Error>> {
+
+        let cbr = CreateBucketRequest {
+            bucket: DIR.to_string(),
+            ..Default::default()
+        };
+
+        match client.create_bucket(cbr).sync() {
+            Err(e) => match e {
+                RusotoError::Service(_) => {
+                    /* bucket already created */
+                    Ok(())
+                },
+                _ => Err(Box::new(ChumError::new(&format!("Creating bucket \
+                    failed: {}", e)))),
+            },
+            Ok(_) => Ok(())
+        }?;
+
+        Ok(())
+    }
 }
 
 impl WorkerTask for &Writer {
@@ -134,10 +225,18 @@ impl WorkerTask for &Writer {
 
         match client {
             WorkerClient::WebDav(easy) => self.web_dav_upload(easy),
-            _ => Err(Box::new(ChumError::new("write not implemented for this \
-                protocol"))),
+            WorkerClient::S3(s3) => self.s3_upload(s3),
         }
 
+    }
+
+    fn setup(&self, client: &mut WorkerClient)
+        -> Result<(), Box<dyn Error>> {
+
+        match client {
+            WorkerClient::WebDav(_) => Ok(()), /* No setup required. */
+            WorkerClient::S3(s3) => self.s3_setup(s3),
+        }
     }
 
     fn get_type(&self) -> String { String::from(OP) }

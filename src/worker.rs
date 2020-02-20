@@ -44,6 +44,11 @@ pub struct WorkerStat {
     pub rtt: u128,
 }
 
+pub enum WorkerClient {
+    WebDav(Easy),
+    S3(S3Client),
+}
+
 fn bytes_to_human(bytes: u64) -> String {
     /* Need to decide if we really care about decimal precision. */
     format!("{:.3}MB", bytes / 1024 / 1024)
@@ -92,14 +97,11 @@ impl WorkerStat {
 }
 
 pub trait WorkerTask {
+    fn setup(&self, client: &mut WorkerClient)
+        -> Result<(), Box<dyn Error>>;
     fn work(&mut self, client: &mut WorkerClient)
         -> Result<Option<WorkerInfo>, Box<dyn Error>>;
     fn get_type(&self) -> String;
-}
-
-pub enum WorkerClient {
-    WebDav(Easy),
-    S3(S3Client),
 }
 
 pub struct Worker {
@@ -141,23 +143,24 @@ impl Worker {
         let client = match protocol.as_ref() {
             "webdav" => WorkerClient::WebDav(Easy::new()),
             "s3" => {
-                match env::var("AWS_ACCESS_KEY_ID") {
-                    Ok(_) => (),
-                    Err(_) => env::set_var("AWS_ACCESS_KEY_ID", "minioadmin"),
-                }
 
-                match env::var("AWS_SECRET_ACCESS_KEY") {
-                    Ok(_) => (),
-                    Err(_) => env::set_var("AWS_SECRET_ACCESS_KEY",
-                        "minioadmin"),
+                /*
+                 * Users may supply access keys in environment variables. We use
+                 * the minio defaults if keys are not provided.
+                 */
+                if env::var("AWS_ACCESS_KEY_ID").is_err() {
+                    env::set_var("AWS_ACCESS_KEY_ID", "minioadmin");
+                }
+                if env::var("AWS_SECRET_ACCESS_KEY").is_err() {
+                    env::set_var("AWS_SECRET_ACCESS_KEY", "minioadmin");
                 }
 
                 let region = Region::Custom {
                     name: "chum-s3".to_owned(),
-                    endpoint: format!("http://{}", target.to_owned()),
+                    endpoint: format!("http://{}:9000", target),
                 };
 
-                let s3client = S3Client::new_with(
+                let s3client: S3Client = S3Client::new_with(
                     rusoto_core::request::HttpClient::new()
                         .expect("failed to create S3 HTTP client"),
                     EnvironmentProvider::default(),
@@ -182,8 +185,29 @@ impl Worker {
     pub fn work(&mut self) {
         let mut rng = thread_rng();
 
+        /*
+         * Perform setup routines.
+         *
+         * We added this because S3 writer workers need to make sure a bucket
+         * is created before they start uploading files. The alternative is to
+         * attempt to create the bucket before every upload which is wasteful.
+         */
+        for operator in &self.ops {
+            let op: Box<dyn WorkerTask> = match operator.as_ref() {
+                "r" => Box::new(&self.reader),
+                "w" => Box::new(&self.writer),
+                _ => panic!("unrecognized operator"),
+            };
+
+            if let Err(e) = op.setup(&mut self.client) {
+                panic!("setup failed for worker ({}): {:?}",
+                    op.get_type(), e);
+            }
+        }
+
         loop {
-            /* Exit the thread when we receive a signal. */
+            /* Thread exits when it receives a signal over its channel. */
+
             { /* Scope so 'operator' doesn't hold an immutable borrow. */
                 let mut operator: Box<dyn WorkerTask> =
                     match self.ops.choose(&mut rng)
