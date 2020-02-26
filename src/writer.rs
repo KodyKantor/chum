@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::vec::Vec;
 use std::error::Error;
 use std::thread;
+use std::time::Instant;
 
 use rand::Rng;
 use rand::AsByteSliceMut;
@@ -167,7 +168,7 @@ impl Writer {
             ..Default::default()
         };
 
-
+        let rtt_start = Instant::now();
 
         /*
          * For the moment we don't have latency stats for S3 requests. Maybe
@@ -181,12 +182,13 @@ impl Writer {
                     QueueItem{ obj: fname.to_string() }
                 );
 
+                let rtt = rtt_start.elapsed().as_millis();
                 Ok(Some(WorkerInfo {
                     id: thread::current().id(),
                     op: String::from(OP),
                     size,
                     ttfb: 0,
-                    rtt: 0,
+                    rtt,
                 }))
             },
         }

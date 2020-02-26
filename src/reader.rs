@@ -11,6 +11,7 @@ extern crate curl;
 use std::error::Error;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Instant;
 
 use crate::queue::{Queue};
 use crate::worker::{WorkerInfo, WorkerTask, WorkerClient, DIR};
@@ -106,6 +107,7 @@ impl Reader {
             ..Default::default()
         };
 
+        let rtt_start = Instant::now();
         let res = client.get_object(gr).sync()?;
 
         /*
@@ -120,13 +122,14 @@ impl Reader {
         }
 
         let size = res.content_length.expect("failed to get content-length");
+        let rtt = rtt_start.elapsed().as_millis();
 
         Ok(Some(WorkerInfo {
                 id: thread::current().id(),
                 op: String::from(OP),
                 size: size as u64,
                 ttfb: 0,
-                rtt: 0,
+                rtt,
         }))
     }
 }
