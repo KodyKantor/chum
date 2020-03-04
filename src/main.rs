@@ -10,6 +10,7 @@ extern crate getopts;
 
 mod writer;
 mod reader;
+mod deleter;
 mod worker;
 mod queue;
 mod utils;

@@ -59,9 +59,13 @@ A read-only workload like so:
 ```
 -w r
 ```
-and a write-only workload like so:
+A write-only workload like so:
 ```
 -w w
+```
+And a 50/50 write/delete workload:
+```
+-w w,d
 ```
 
 The ID of objects uploaded are added to a queue. IDs are taken from the queue
@@ -150,6 +154,10 @@ To build:
 $ cd chum
 $ cargo build
 ```
+
+## Notes
+
+The delete workload is currently only supported for the S3 client.
 
 ## License
 

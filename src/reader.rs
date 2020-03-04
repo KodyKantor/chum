@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 
-use crate::queue::{Queue};
+use crate::queue::Queue;
 use crate::worker::{WorkerInfo, WorkerTask, WorkerClient, DIR};
 use crate::utils::ChumError;
 

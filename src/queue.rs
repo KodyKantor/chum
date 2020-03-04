@@ -130,16 +130,16 @@ impl Queue {
         }
     }
 
-    fn remove(&mut self) {
+    pub fn remove(&mut self) -> Option<QueueItem> {
         if self.items.is_empty() {
-            return
+            return None
         }
 
         match self.mode {
-            QueueMode::Lru => self.items.remove(0),
-            QueueMode::Mru => self.items.remove(0),
-            QueueMode::Rand => self.items.remove(
-                rand::thread_rng().gen_range(0, self.items.len())),
-        };
+            QueueMode::Lru => Some(self.items.remove(0)),
+            QueueMode::Mru => Some(self.items.remove(0)),
+            QueueMode::Rand => Some(self.items.remove(
+                rand::thread_rng().gen_range(0, self.items.len()))),
+        }
     }
 }

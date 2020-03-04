@@ -20,6 +20,7 @@ use rusoto_credential::EnvironmentProvider;
 
 use crate::writer::Writer;
 use crate::reader::Reader;
+use crate::deleter::Deleter;
 use crate::queue::Queue;
 use crate::utils::ChumError;
 
@@ -107,6 +108,7 @@ pub trait WorkerTask {
 pub struct Worker {
     writer: Writer,
     reader: Reader,
+    deleter: Deleter,
     client: WorkerClient,
     tx: Sender<Result<WorkerInfo, ChumError>>,
     signal: Receiver<()>,
@@ -132,6 +134,7 @@ impl Worker {
 
         let writer = Writer::new(target.clone(), distr, Arc::clone(&queue));
         let reader = Reader::new(target.clone(), Arc::clone(&queue));
+        let deleter = Deleter::new(target.clone(), Arc::clone(&queue));
 
         /*
          * Construct a client of the given type.
@@ -174,6 +177,7 @@ impl Worker {
         Worker {
             writer,
             reader,
+            deleter,
             client,
             tx,
             signal,
@@ -196,6 +200,7 @@ impl Worker {
             let op: Box<dyn WorkerTask> = match operator.as_ref() {
                 "r" => Box::new(&self.reader),
                 "w" => Box::new(&self.writer),
+                "d" => Box::new(&self.deleter),
                 _ => panic!("unrecognized operator"),
             };
 
@@ -216,6 +221,7 @@ impl Worker {
                     /* XXX we should use something more elegant here. */
                     "r" => Box::new(&self.reader),
                     "w" => Box::new(&self.writer),
+                    "d" => Box::new(&self.deleter),
                     _ => panic!("unrecognized operator"),
                 };
 
