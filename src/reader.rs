@@ -12,14 +12,15 @@ use std::error::Error;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
+use std::io::Read;
+use std::fs::File;
 
 use crate::queue::Queue;
-use crate::worker::{WorkerInfo, WorkerTask, WorkerClient, DIR};
+use crate::worker::{WorkerInfo, WorkerTask, WorkerClient, FsClient, DIR};
 use crate::utils::ChumError;
 
 use curl::easy::Easy;
 use rusoto_s3::{S3Client, GetObjectRequest, S3};
-use std::io::Read;
 
 pub const OP: &str = "read";
 
@@ -132,6 +133,39 @@ impl Reader {
                 rtt,
         }))
     }
+
+    fn fs_read(&self, fs: &FsClient)
+        -> Result<Option<WorkerInfo>, Box<dyn Error>> {
+
+        let fname: String;
+        {
+            let mut q = self.queue.lock().unwrap();
+            let qi = q.get();
+            if qi.is_none() {
+                return Ok(None)
+            }
+            let qi = qi.unwrap();
+
+            fname = qi.obj.clone();
+        }
+
+        let rtt_start = Instant::now();
+    
+        let mut buf = Vec::new();
+        let mut file =
+            File::open(&format!("/{}/{}/{}", fs.basedir, DIR, fname))?;
+        let size = file.read_to_end(&mut buf)?;
+
+        let rtt = rtt_start.elapsed().as_millis();
+
+        Ok(Some(WorkerInfo {
+            id: thread::current().id(),
+            op: self.get_type(),
+            size: size as u64,
+            ttfb: 0,
+            rtt,
+        }))
+    }
 }
 
 impl WorkerTask for &Reader {
@@ -141,7 +175,7 @@ impl WorkerTask for &Reader {
         match client {
             WorkerClient::WebDav(easy) => self.web_dav_download(easy),
             WorkerClient::S3(s3) => self.s3_download(s3),
-            _ => Err(Box::new(ChumError::new("not implemented")))
+            WorkerClient::Fs(fs) => self.fs_read(fs),
         }
     }
 

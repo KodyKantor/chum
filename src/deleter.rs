@@ -12,7 +12,7 @@ use std::thread;
 use std::time::Instant;
 
 use crate::queue::{Queue, QueueItem};
-use crate::worker::{WorkerInfo, WorkerTask, WorkerClient, DIR};
+use crate::worker::{WorkerInfo, WorkerTask, WorkerClient, FsClient, DIR};
 use crate::utils::ChumError;
 
 use rusoto_s3::{S3Client, S3, DeleteObjectRequest};
@@ -75,6 +75,45 @@ impl Deleter {
             rtt
         }))
     }
+
+    pub fn fs_delete(&self, fs: &FsClient)
+        -> Result<Option<WorkerInfo>, Box<dyn Error>> {
+
+        let fname: String;
+        {
+            let mut q = self.queue.lock().unwrap();
+            let qi = q.remove();
+            if qi.is_none() {
+                return Ok(None)
+            }
+            let qi = qi.unwrap();
+
+            fname = qi.obj;
+        }
+
+        let rtt_start = Instant::now();
+
+        let res =
+            std::fs::remove_file(&format!("/{}/{}/{}", fs.basedir, DIR, fname));
+
+        if let Err(e) = res {
+            self.queue.lock().unwrap().insert(QueueItem{ obj: fname.clone() });
+
+            return Err(Box::new(ChumError::new(&format!("Deleting {} \
+                failed: {}", fname, e))))
+        }
+
+        let rtt = rtt_start.elapsed().as_millis();
+
+        Ok(Some(WorkerInfo {
+            id: thread::current().id(),
+            op: self.get_type(),
+            size: 0,
+            ttfb: 0,
+            rtt
+        }))
+    }
+
 }
 
 impl WorkerTask for &Deleter {
@@ -83,6 +122,7 @@ impl WorkerTask for &Deleter {
 
         match client {
             WorkerClient::S3(s3) => self.s3_delete(s3),
+            WorkerClient::Fs(fs) => self.fs_delete(fs),
             _ => Err(Box::new(ChumError::new("not implemented")))
         }
     }
