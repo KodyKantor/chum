@@ -141,17 +141,15 @@ impl WorkerTask for &Reader {
         match client {
             WorkerClient::WebDav(easy) => self.web_dav_download(easy),
             WorkerClient::S3(s3) => self.s3_download(s3),
+            _ => Err(Box::new(ChumError::new("not implemented")))
         }
     }
 
-    fn setup(&self, client: &mut WorkerClient)
+    /* No setup is currently required for these workers. */
+    fn setup(&self, _client: &mut WorkerClient)
         -> Result<(), Box<dyn Error>> {
- 
-        /* No setup required */
-        match client {
-            WorkerClient::WebDav(_) => Ok(()),
-            WorkerClient::S3(_) => Ok(()),
-        }
+
+        Ok(())
     }
 
     fn get_type(&self) -> String { String::from(OP) }

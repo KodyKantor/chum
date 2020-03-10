@@ -16,11 +16,13 @@ use std::vec::Vec;
 use std::error::Error;
 use std::thread;
 use std::time::Instant;
+use std::fs::File;
+use std::io::{Write, BufWriter};
 
 use rand::Rng;
 use rand::AsByteSliceMut;
 
-use crate::worker::{WorkerInfo, WorkerTask, WorkerClient, DIR};
+use crate::worker::{WorkerInfo, WorkerTask, WorkerClient, FsClient, DIR};
 use crate::queue::{Queue, QueueItem};
 use crate::utils::ChumError;
 
@@ -126,8 +128,8 @@ impl Writer {
             }))
 
         } else {
-            Err(Box::new(ChumError::new(
-                &format!("Writing {} failed: {}", path, code))))
+            Err(ChumError::new(
+                &format!("Writing {} failed: {}", path, code)).into())
         }
     }
 
@@ -187,7 +189,61 @@ impl Writer {
                     id: thread::current().id(),
                     op: String::from(OP),
                     size,
-                    ttfb: 0,
+                    ttfb: 0, /* not supported */
+                    rtt,
+                }))
+            },
+        }
+    }
+
+    /* Write a file locally. */
+    fn fs_write(&self, fs: &FsClient)
+        -> Result<Option<WorkerInfo>, Box<dyn Error>> {
+        let fname = Uuid::new_v4();
+        let mut rng = thread_rng();
+        let size = *self.distr.choose(&mut rng)
+            .expect("choosing file size failed");
+
+        let file = File::create(&format!("/{}/{}/{}", fs.basedir, DIR, fname))?;
+        let mut bw = BufWriter::new(&file);
+
+        let mut buf: Vec<u8> = Vec::with_capacity(size as usize);
+        let mut bytes_to_go = size;
+        while bytes_to_go > 0 {
+            if bytes_to_go < self.buf.len() as u64 {
+                let tail = &self.buf[0..(bytes_to_go - 1) as usize];
+                buf.extend(tail);
+                break;
+            }
+            buf.extend(&self.buf);
+            bytes_to_go -= self.buf.len() as u64;
+        }
+
+        let rtt_start = Instant::now();
+
+        /*
+         * Write the data to the file and then issue an fsync. fsync is
+         * VERY important. I shouldn't have to say that, but many storage
+         * systems in the real world do not perform synchronous IO because
+         * the implementors feel that speed is more important than durability.
+         *
+         * Durability is a constraint, not a feature!
+         */
+        bw.write_all(&buf)?;
+
+        match file.sync_all() {
+            Err(e) => Err(e.into()),
+            Ok(_) => {
+                self.queue.lock().unwrap().insert(
+                    QueueItem{ obj: fname.to_string() }
+                );
+
+                let rtt = rtt_start.elapsed().as_millis();
+                Ok(Some(WorkerInfo {
+                    id: thread::current().id(),
+                    op: String::from(OP),
+                    size,
+                    ttfb: 0, /* not supported */
                     rtt,
                 }))
             },
@@ -197,14 +253,14 @@ impl Writer {
     /*
      * Initial setup of S3 environment.
      */
-    fn s3_setup(&self, client: &mut S3Client)
-        -> Result<(), Box<dyn Error>> {
+    fn s3_setup(&self, client: &mut S3Client) -> Result<(), Box<dyn Error>> {
 
         let cbr = CreateBucketRequest {
             bucket: DIR.to_string(),
             ..Default::default()
         };
 
+        /* XXX refactor? */
         match client.create_bucket(cbr).sync() {
             Err(e) => match e {
                 RusotoError::Service(_) => {
@@ -219,6 +275,15 @@ impl Writer {
 
         Ok(())
     }
+
+    fn fs_setup(&self, fs: &FsClient) -> Result<(), Box<dyn Error>> {
+        match std::fs::create_dir_all(&format!("/{}/{}", fs.basedir, DIR)) {
+            Err(_) => {
+                Err(ChumError::new("Creating leading paths failed").into())
+            }
+            Ok(_) => Ok(())
+        }
+    }
 }
 
 impl WorkerTask for &Writer {
@@ -228,6 +293,7 @@ impl WorkerTask for &Writer {
         match client {
             WorkerClient::WebDav(easy) => self.web_dav_upload(easy),
             WorkerClient::S3(s3) => self.s3_upload(s3),
+            WorkerClient::Fs(fs) => self.fs_write(fs),
         }
 
     }
@@ -236,8 +302,9 @@ impl WorkerTask for &Writer {
         -> Result<(), Box<dyn Error>> {
 
         match client {
-            WorkerClient::WebDav(_) => Ok(()), /* No setup required. */
             WorkerClient::S3(s3) => self.s3_setup(s3),
+            WorkerClient::Fs(fs) => self.fs_setup(fs),
+            _ => Ok(()),
         }
     }
 

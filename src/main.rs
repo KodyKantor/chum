@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     opts.reqopt("t",
                 "target",
                 "target server",
-                "[s3|webdav]:IP");
+                "[s3|webdav|fs]:IP|PATH");
 
     opts.optopt("c",
                 "concurrency",

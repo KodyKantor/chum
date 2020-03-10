@@ -26,6 +26,10 @@ use crate::utils::ChumError;
 
 pub const DIR: &str = "chum";
 
+pub struct FsClient {
+    pub basedir: String, /* path below which all data will be written */
+}
+
 #[derive(Debug)]
 pub struct WorkerInfo {
     pub id: ThreadId,
@@ -48,6 +52,7 @@ pub struct WorkerStat {
 pub enum WorkerClient {
     WebDav(Easy),
     S3(S3Client),
+    Fs(FsClient),
 }
 
 fn bytes_to_human(bytes: u64) -> String {
@@ -171,6 +176,9 @@ impl Worker {
 
                 WorkerClient::S3(s3client)
             },
+            "fs" => {
+                WorkerClient::Fs(FsClient { basedir: target } )
+            }
             _ => panic!("unknown client protocol"),
         };
 
