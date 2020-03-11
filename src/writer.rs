@@ -230,6 +230,7 @@ impl Writer {
          * Durability is a constraint, not a feature!
          */
         bw.write_all(&buf)?;
+        bw.flush()?;
 
         match file.sync_all() {
             Err(e) => Err(e.into()),
