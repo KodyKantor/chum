@@ -79,7 +79,18 @@ impl Backend for Fs {
                 self.basedir, DIR, DIR, first_two);
         let full_path = &format!("{}/{}", directory, fname);
 
-        std::fs::create_dir(directory)?;
+        if let Err(_e) = std::fs::create_dir(directory) {
+            /*
+             * One of three cases:
+             * - lack permission to create directory
+             * - parent path doesn't exist (should be handled by Fs::setup)
+             * - directory already exists (common case)
+             *
+             * Unfortunately we don't get a real error type we can parse to see
+             * what the error was, so we just do nothing here.
+             */
+        }
+
         let file = File::create(full_path)?;
 
         let mut bw = BufWriter::new(&file);
