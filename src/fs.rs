@@ -47,24 +47,13 @@ impl Fs {
         let mut vec: Vec<u8> = Vec::new();
         vec.extend_from_slice(arr);
 
-        let fs = Fs {
+        Fs {
             basedir,
             distr: Arc::new(distr),
             queue: Arc::clone(&queue),
             buf: vec,
-        };
-
-        fs.setup();
-
-        fs
+        }
     }
-
-    fn setup(&self) {
-        std::fs::create_dir_all(
-            &format!("/{}/{}", self.basedir, DIR))
-            .expect("could not create base directories");
-    }
-
 }
 
 impl Backend for Fs {
@@ -74,13 +63,13 @@ impl Backend for Fs {
         let size = *self.distr.choose(&mut rng)
             .expect("choosing file size failed");
 
-        let file = match File::create(
-            &format!("/{}/{}/{}", self.basedir, DIR, fname)) {
-            Err(e) => Err(ChumError::new(&format!(
-                "failed to create file {}/{}/{}: {}", self.basedir, DIR, fname,
-                e))),
-            Ok(f) => Ok(f),
-        }?;
+        let first_two = &fname.to_string()[0..2];
+        let directory = &format!("/{}/{}/v2/{}/{}",
+                self.basedir, DIR, DIR, first_two);
+        let full_path = &format!("{}/{}", directory, fname);
+
+        std::fs::create_dir_all(directory)?;
+        let file = File::create(full_path)?;
 
         let mut bw = BufWriter::new(&file);
 
@@ -106,14 +95,8 @@ impl Backend for Fs {
          *
          * Durability is a constraint, not a feature!
          */
-        if let Err(e) = bw.write_all(&buf) {
-            return Err(ChumError::new(&format!("failed to write data: {}", e)))
-        };
-
-        if let Err(e) = bw.flush() {
-            return Err(ChumError::new(&format!("failed to flush buffer: {}",
-                e)))
-        }
+        bw.write_all(&buf)?;
+        bw.flush()?;
 
         match file.sync_all() {
             Err(e) => Err(ChumError::new(&format!("fsync failed: {}", e))),
@@ -148,20 +131,17 @@ impl Backend for Fs {
         }
 
         let rtt_start = Instant::now();
+
+        let first_two = &fname.to_string()[0..2];
+        let directory = &format!("/{}/{}/v2/{}/{}",
+                self.basedir, DIR, DIR, first_two);
+        let full_path = &format!("{}/{}", directory, fname);
     
         let mut buf = Vec::new();
         let mut file =
-            match File::open(&format!("/{}/{}/{}", self.basedir, DIR, fname)) {
+            File::open(full_path)?;
 
-            Ok(f) => Ok(f),
-            Err(e) => Err(ChumError::new(&format!("opening file failed: {}",
-                e))),
-        }?;
-        let size = match file.read_to_end(&mut buf) {
-            Ok(size) => Ok(size),
-            Err(e) => Err(ChumError::new(&format!("reading file failed: {}",
-                e))),
-        }?;
+        let size = file.read_to_end(&mut buf)?;
 
         let rtt = rtt_start.elapsed().as_millis();
 
@@ -189,9 +169,12 @@ impl Backend for Fs {
 
         let rtt_start = Instant::now();
 
-        let res =
-            std::fs::remove_file(&format!(
-                "/{}/{}/{}", self.basedir, DIR, fname));
+        let first_two = &fname.to_string()[0..2];
+        let directory = &format!("/{}/{}/v2/{}/{}",
+                self.basedir, DIR, DIR, first_two);
+        let full_path = &format!("{}/{}", directory, fname);
+
+        let res = std::fs::remove_file(full_path);
 
         if let Err(e) = res {
             self.queue.lock().unwrap().insert(QueueItem{ obj: fname.clone() });

@@ -133,9 +133,13 @@ impl Backend for S3 {
             bytes_to_go -= self.buf.len() as u64;
         }
 
+        let first_two = &fname.to_string()[0..2];
+        let directory = &format!("v2/{}/{}", DIR, first_two);
+        let full_path = &format!("{}/{}", directory, fname);
+
         let pr = PutObjectRequest {
             bucket: DIR.to_string(),
-            key: fname.to_string(),
+            key: full_path.to_string(),
             body: Some(buf.into()),
             ..Default::default()
         };
@@ -151,7 +155,7 @@ impl Backend for S3 {
             Err(e) => Err(ChumError::new(&e.to_string())),
             Ok(_) => {
                 self.queue.lock().unwrap().insert(
-                    QueueItem{ obj: fname.to_string() }
+                    QueueItem{ obj: full_path.to_string() }
                 );
 
                 let rtt = rtt_start.elapsed().as_millis();

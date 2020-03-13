@@ -248,6 +248,11 @@ impl From<curl::Error> for ChumError {
         ChumError::new(err.description())
     }
 }
+impl From<std::io::Error> for ChumError {
+    fn from(err: std::io::Error) -> Self {
+        ChumError::new(err.description())
+    }
+}
 
 /* Convert a human-readable string (e.g. '4k') to bytes (e.g. '4096'). */
 pub fn parse_human(val: &str) -> Result<u64, ChumError> {

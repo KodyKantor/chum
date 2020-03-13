@@ -67,15 +67,17 @@ impl Backend for WebDav {
 
         /* This should be similar to how muskie generates objectids. */
         let fname = Uuid::new_v4();
+        let first_two = &fname.to_string()[0..2];
+        let directory = &format!("/{}/v2/{}/{}",
+                DIR, DIR, first_two);
+        let full_path = &format!("{}/{}", directory, fname);
 
         /* Randomly choose a file size from the list. */
         let size = *self.distr.choose(&mut rng)
             .expect("choosing file size failed");
 
-        let path = format!("{}/{}", DIR, fname);
-
         client.url(&format!(
-            "http://{}:80/{}/{}", self.target, DIR, fname))?;
+            "http://{}:80/{}", self.target, full_path))?;
         client.put(true)?;
         client.upload(true)?;
         client.in_filesize(size)?;
@@ -113,7 +115,9 @@ impl Backend for WebDav {
             let ttfb = client.starttransfer_time().unwrap().as_millis();
             let rtt = client.total_time().unwrap().as_millis();
 
-            self.queue.lock().unwrap().insert(QueueItem{ obj: path });
+            self.queue.lock().unwrap().insert(QueueItem{
+                obj: full_path.to_string()
+            });
             Ok(Some(WorkerInfo {
                 id: thread::current().id(),
                 op: Operation::Write,
@@ -124,9 +128,10 @@ impl Backend for WebDav {
 
         } else {
             Err(ChumError::new(
-                &format!("Writing {} failed: {}", path, code)))
+                &format!("Writing {} failed: {}", full_path, code)))
         }
     }
+
     fn read(&self) -> Result<Option<WorkerInfo>, ChumError> {
 
         let mut client = Easy::new();
