@@ -47,12 +47,23 @@ impl Fs {
         let mut vec: Vec<u8> = Vec::new();
         vec.extend_from_slice(arr);
 
-        Fs {
+        let fs = Fs {
             basedir,
             distr: Arc::new(distr),
             queue: Arc::clone(&queue),
             buf: vec,
-        }
+        };
+
+        fs.setup();
+
+        fs
+    }
+
+    fn setup(&self) {
+        let directory = &format!("/{}/{}/v2/{}",
+                self.basedir, DIR, DIR);
+        std::fs::create_dir_all(directory).expect("failed to create initial \
+            directory layout");
     }
 }
 
@@ -68,7 +79,7 @@ impl Backend for Fs {
                 self.basedir, DIR, DIR, first_two);
         let full_path = &format!("{}/{}", directory, fname);
 
-        std::fs::create_dir_all(directory)?;
+        std::fs::create_dir(directory)?;
         let file = File::create(full_path)?;
 
         let mut bw = BufWriter::new(&file);
