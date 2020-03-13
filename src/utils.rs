@@ -18,8 +18,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
-use crate::worker::{WorkerInfo, WorkerStat};
-use crate::{reader, writer};
+use crate::worker::{WorkerInfo, WorkerStat, Operation};
 use crate::queue::{Queue, QueueItem};
 
 #[derive(PartialEq)]
@@ -79,7 +78,7 @@ pub fn collect_stats(
                     }
                     wr = WorkerInfo {
                         id: thread::current().id(),
-                        op: "error".to_string(),
+                        op: Operation::Error,
                         size: 0,
                         ttfb: 0,
                         rtt: 0,
@@ -87,27 +86,22 @@ pub fn collect_stats(
                 },
             }
 
-            if wr.op == writer::OP {
+            /* XXX make an enum. */
+            if wr.op == Operation::Write {
                 total_bytes_written += wr.size;
             }
 
-            if !op_stats.contains_key(&wr.op) {
-                op_stats.insert(wr.op.clone(), HashMap::new());
-            }
+            op_stats.entry(wr.op).or_insert_with(HashMap::new);
 
             let thread_stats = op_stats.get_mut(&wr.op).unwrap();
             thread_stats.entry(wr.id).or_insert_with(WorkerStat::new);
             thread_stats.get_mut(&wr.id).unwrap().add_result(&wr);
 
-            if !op_ticks.contains_key(&wr.op) {
-                op_ticks.insert(wr.op.clone(), WorkerStat::new());
-            }
+            op_ticks.entry(wr.op).or_insert_with(WorkerStat::new);
             let tick_totals = op_ticks.get_mut(&wr.op).unwrap();
             tick_totals.add_result(&wr);
 
-            if !op_agg.contains_key(&wr.op) {
-                op_agg.insert(wr.op.clone(), WorkerStat::new());
-            }
+            op_agg.entry(wr.op).or_insert_with(WorkerStat::new);
             let agg_totals = op_agg.get_mut(&wr.op).unwrap();
             agg_totals.add_result(&wr);
         }
@@ -133,9 +127,9 @@ pub fn collect_stats(
 fn print_human(
     start_time: SystemTime,
     format: &OutputFormat,
-    mut op_stats: HashMap<String, HashMap<ThreadId, WorkerStat>>,
-    mut op_ticks: HashMap<String, WorkerStat>,
-    op_agg: &mut HashMap<String, WorkerStat>) {
+    mut op_stats: HashMap<Operation, HashMap<ThreadId, WorkerStat>>,
+    mut op_ticks: HashMap<Operation, WorkerStat>,
+    op_agg: &mut HashMap<Operation, WorkerStat>) {
 
     /* Print out the stats we gathered. */
     println!("---");
@@ -152,7 +146,7 @@ fn print_human(
                     continue;
                 }
 
-                if op == "error" {
+                if op == &Operation::Error {
                     println!("\t{}: {} errors", i, worker.objs);
                 } else {
                     println!("\t{}: {}", i, worker.serialize_relative());
@@ -170,7 +164,7 @@ fn print_human(
             println!("No activity this tick");
             continue;
         }
-        if op == "error" {
+        if op == &Operation::Error {
             println!("\t{} errors", worker.objs);
         } else {
             println!("\t{}", worker.serialize_relative());
@@ -184,7 +178,7 @@ fn print_human(
             continue;
         }
         let elapsed_sec = start_time.elapsed().unwrap().as_secs();
-        if op == "error" {
+        if op == &Operation::Error {
             println!("\t{} errors", worker.objs);
         } else {
             println!("\t{}", worker.serialize_absolute(elapsed_sec));
@@ -195,22 +189,22 @@ fn print_human(
 fn print_tabular(
     _: SystemTime,
     _: &OutputFormat,
-    _: HashMap<String, HashMap<ThreadId, WorkerStat>>,
-    op_ticks: HashMap<String, WorkerStat>,
-    _: &mut HashMap<String, WorkerStat>) {
+    _: HashMap<Operation, HashMap<ThreadId, WorkerStat>>,
+    op_ticks: HashMap<Operation, WorkerStat>,
+    _: &mut HashMap<Operation, WorkerStat>) {
 
     let zero_stat = WorkerStat::new();
-    let reader_stats = match op_ticks.get(reader::OP) {
+    let reader_stats = match op_ticks.get(&Operation::Read) {
         Some(stats) => stats,
         None => &zero_stat,
     };
 
-    let writer_stats = match op_ticks.get(writer::OP) {
+    let writer_stats = match op_ticks.get(&Operation::Write) {
         Some(stats) => stats,
         None => &zero_stat,
     };
 
-    let error_stats = match op_ticks.get("error") {
+    let error_stats = match op_ticks.get(&Operation::Error) {
         Some(stats) => stats,
         None => &zero_stat,
     };
@@ -247,6 +241,12 @@ impl std::fmt::Display for ChumError {
         fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
             write!(f, "{}", self.msg)
         }
+}
+/* Wrap errors from libcurl. */
+impl From<curl::Error> for ChumError {
+    fn from(err: curl::Error) -> Self {
+        ChumError::new(err.description())
+    }
 }
 
 /* Convert a human-readable string (e.g. '4k') to bytes (e.g. '4096'). */

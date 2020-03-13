@@ -6,34 +6,23 @@
  * Copyright 2020 Joyent, Inc.
  */
 
-use std::env;
 use std::sync::{Arc, Mutex, mpsc::{Sender, Receiver, TryRecvError}};
 use std::{thread, thread::ThreadId};
 use std::time;
-use std::error::Error;
 use rand::prelude::*;
 
-use curl::easy::Easy;
-use rusoto_s3::S3Client;
-use rusoto_core::Region;
-use rusoto_credential::EnvironmentProvider;
-
-use crate::writer::Writer;
-use crate::reader::Reader;
-use crate::deleter::Deleter;
 use crate::queue::Queue;
 use crate::utils::ChumError;
+use crate::s3::S3;
+use crate::fs::Fs;
+use crate::webdav::WebDav;
 
 pub const DIR: &str = "chum";
-
-pub struct FsClient {
-    pub basedir: String, /* path below which all data will be written */
-}
 
 #[derive(Debug)]
 pub struct WorkerInfo {
     pub id: ThreadId,
-    pub op: String, /* e.g. 'read' or 'write' */
+    pub op: Operation, /* e.g. 'read' or 'write' */
     pub size: u64, /* in bytes */
     pub ttfb: u128, /* millis */
     pub rtt: u128, /* millis */
@@ -47,12 +36,6 @@ pub struct WorkerStat {
     pub data: u64,
     pub ttfb: u128,
     pub rtt: u128,
-}
-
-pub enum WorkerClient {
-    WebDav(Easy),
-    S3(S3Client),
-    Fs(FsClient),
 }
 
 fn bytes_to_human(bytes: u64) -> String {
@@ -102,19 +85,35 @@ impl WorkerStat {
 
 }
 
-pub trait WorkerTask {
-    fn setup(&self, client: &mut WorkerClient)
-        -> Result<(), Box<dyn Error>>;
-    fn work(&mut self, client: &mut WorkerClient)
-        -> Result<Option<WorkerInfo>, Box<dyn Error>>;
-    fn get_type(&self) -> String;
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Operation {
+    Read,
+    Write,
+    Delete,
+    Error,
+}
+
+impl std::fmt::Display for Operation {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let str = match self {
+            Operation::Read => "read",
+            Operation::Write => "write",
+            Operation::Delete => "delete",
+            Operation::Error => "error",
+        };
+        write!(f, "{}", str)
+    }
+}
+
+
+pub trait Backend {
+    fn write(&self) -> Result<Option<WorkerInfo>, ChumError>;
+    fn read(&self) -> Result<Option<WorkerInfo>, ChumError>;
+    fn delete(&self) -> Result<Option<WorkerInfo>, ChumError>;
 }
 
 pub struct Worker {
-    writer: Writer,
-    reader: Reader,
-    deleter: Deleter,
-    client: WorkerClient,
+    backend: Box<dyn Backend>,
     tx: Sender<Result<WorkerInfo, ChumError>>,
     signal: Receiver<()>,
     pause: u64,
@@ -137,10 +136,6 @@ impl Worker {
         let protocol = tok[0].to_ascii_lowercase(); /* e.g. 's3' or 'webdav'. */
         let target = tok[1].to_string();
 
-        let writer = Writer::new(target.clone(), distr, Arc::clone(&queue));
-        let reader = Reader::new(target.clone(), Arc::clone(&queue));
-        let deleter = Deleter::new(target.clone(), Arc::clone(&queue));
-
         /*
          * Construct a client of the given type.
          *
@@ -148,45 +143,24 @@ impl Worker {
          * keeps around a bunch of global state that we overwrite each time
          * we use it.
          */
-        let client = match protocol.as_ref() {
-            "webdav" => WorkerClient::WebDav(Easy::new()),
+        let backend: Box<dyn Backend> = match protocol.as_ref() {
+            "webdav" => {
+                Box::new(WebDav::new(target, distr,
+                    Arc::clone(&queue)))
+            },
             "s3" => {
-
-                /*
-                 * Users may supply access keys in environment variables. We use
-                 * the minio defaults if keys are not provided.
-                 */
-                if env::var("AWS_ACCESS_KEY_ID").is_err() {
-                    env::set_var("AWS_ACCESS_KEY_ID", "minioadmin");
-                }
-                if env::var("AWS_SECRET_ACCESS_KEY").is_err() {
-                    env::set_var("AWS_SECRET_ACCESS_KEY", "minioadmin");
-                }
-
-                let region = Region::Custom {
-                    name: "chum-s3".to_owned(),
-                    endpoint: format!("http://{}:9000", target),
-                };
-
-                let s3client: S3Client = S3Client::new_with(
-                    rusoto_core::request::HttpClient::new()
-                        .expect("failed to create S3 HTTP client"),
-                    EnvironmentProvider::default(),
-                    region);
-
-                WorkerClient::S3(s3client)
+                Box::new(S3::new(target, distr,
+                    Arc::clone(&queue)))
             },
             "fs" => {
-                WorkerClient::Fs(FsClient { basedir: target } )
+                Box::new(Fs::new(target, distr,
+                    Arc::clone(&queue)))
             }
             _ => panic!("unknown client protocol"),
         };
 
         Worker {
-            writer,
-            reader,
-            deleter,
-            client,
+            backend,
             tx,
             signal,
             pause,
@@ -194,70 +168,51 @@ impl Worker {
         }
     }
 
-    pub fn work(&mut self) {
-        let mut rng = thread_rng();
+    pub fn process_result(&self, res: Result<Option<WorkerInfo>, ChumError>) {
+        match res {
+            Ok(val) => if let Some(wr) = val {
+                /*
+                 * The other end of this channel is likely no longer
+                 * listening. Even though this worker performed work
+                 * that will not be accounted for, stop the worker.
+                 */
+                if self.should_stop() {
+                    return;
+                }
 
-        /*
-         * Perform setup routines.
-         *
-         * We added this because S3 writer workers need to make sure a bucket
-         * is created before they start uploading files. The alternative is to
-         * attempt to create the bucket before every upload which is wasteful.
-         */
-        for operator in &self.ops {
-            let op: Box<dyn WorkerTask> = match operator.as_ref() {
-                "r" => Box::new(&self.reader),
-                "w" => Box::new(&self.writer),
-                "d" => Box::new(&self.deleter),
-                _ => panic!("unrecognized operator"),
-            };
+                self.send_info(Ok(wr));
+            },
+            Err(e) => {
+                /*
+                 * There was an error but the main thread has stopped paying
+                 * attention. Just log the error and exit.
+                 */
+                if self.should_stop() {
+                    println!("worker error: {}", e.to_string());
+                    return;
+                }
 
-            if let Err(e) = op.setup(&mut self.client) {
-                panic!("setup failed for worker ({}): {:?}",
-                    op.get_type(), e);
+                self.send_info(Err(e));
             }
         }
+
+    }
+
+    pub fn work(&mut self) {
+        let mut rng = thread_rng();
 
         loop {
             /* Thread exits when it receives a signal over its channel. */
 
-            { /* Scope so 'operator' doesn't hold an immutable borrow. */
-                let mut operator: Box<dyn WorkerTask> =
-                    match self.ops.choose(&mut rng)
-                    .expect("choosing operation failed").as_ref() {
+            match self.ops.choose(&mut rng)
+                .expect("choosing operation failed").as_ref() {
 
-                    /* XXX we should use something more elegant here. */
-                    "r" => Box::new(&self.reader),
-                    "w" => Box::new(&self.writer),
-                    "d" => Box::new(&self.deleter),
-                    _ => panic!("unrecognized operator"),
-                };
+                "r" => self.process_result(self.backend.read()),
+                "w" => self.process_result(self.backend.write()),
+                "d" => self.process_result(self.backend.delete()),
+                _ => panic!("unrecognized operator"),
+            };
 
-                /*
-                 * Kick off an operation, collect the worker result, and send
-                 * it off through the channel to the stat collector.
-                 */
-                match operator.work(&mut self.client) {
-                    Ok(val) => if let Some(wr) = val {
-                        /*
-                         * The other end of this channel is likely no longer
-                         * listening. Even though this worker performed work
-                         * that will not be accounted for, stop the worker.
-                         */
-                        if self.should_stop() {
-                            return;
-                        }
-                        self.send_info(Ok(wr));
-                    },
-                    Err(e) => {
-                        if self.should_stop() {
-                            println!("worker error: {}", e.to_string());
-                            return;
-                        }
-                        self.send_info(Err(ChumError::new(&e.to_string())));
-                    }
-                }
-            }
             self.sleep();
         }
     }

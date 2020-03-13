@@ -8,12 +8,13 @@
 
 extern crate getopts;
 
-mod writer;
-mod reader;
-mod deleter;
 mod worker;
 mod queue;
 mod utils;
+
+mod s3;
+mod fs;
+mod webdav;
 
 use std::env;
 use std::{thread, thread::JoinHandle};
@@ -200,9 +201,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     for _ in 0..conc {
         let (sender, signal) = channel();
         worker_chan.push(sender);
-        let mut worker = Worker::new(signal, tx.clone(), target.clone(),
-            distr.clone(), sleep, q.clone(), ops.clone());
-        worker_threads.push(thread::spawn(move || { worker.work(); }));
+
+        /* There must be a way to make this more elegant. */
+        let ctx = tx.clone();
+        let ctarg = target.clone();
+        let cdistr = distr.clone();
+        let cq = q.clone();
+        let cops = ops.clone();
+
+        worker_threads.push(thread::spawn(move || {
+            Worker::new(signal, ctx, ctarg,
+                cdistr, sleep, cq, cops).work();
+        }));
     }
 
     /* Kick off statistics collection and reporting. */
