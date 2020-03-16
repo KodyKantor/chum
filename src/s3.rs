@@ -68,7 +68,7 @@ impl S3 {
 
         let region = Region::Custom {
             name: "chum-s3".to_owned(),
-            endpoint: format!("http://{}:9090", target),
+            endpoint: format!("http://{}:9000", target),
         };
 
         let client: S3Client = S3Client::new_with(
