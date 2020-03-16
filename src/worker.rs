@@ -213,6 +213,10 @@ impl Worker {
                 _ => panic!("unrecognized operator"),
             };
 
+            if self.should_stop() {
+                return;
+            }
+
             self.sleep();
         }
     }
