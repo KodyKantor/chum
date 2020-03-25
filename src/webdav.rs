@@ -52,6 +52,12 @@ impl WebDav {
             buf: vec,
         }
     }
+
+    pub fn get_path(&self, fname: String) -> String {
+        let first_two = &fname[0..2];
+        format!("http://{}:80/{}/v2/{}/{}/{}",
+            self.target, DIR, DIR, first_two, fname)
+    }
 }
 
 impl Backend for WebDav {
@@ -67,17 +73,14 @@ impl Backend for WebDav {
 
         /* This should be similar to how muskie generates objectids. */
         let fname = Uuid::new_v4();
-        let first_two = &fname.to_string()[0..2];
-        let directory = &format!("/{}/v2/{}/{}",
-                DIR, DIR, first_two);
-        let full_path = &format!("{}/{}", directory, fname);
+
+        let full_path = self.get_path(fname.to_string());
 
         /* Randomly choose a file size from the list. */
         let size = *self.distr.choose(&mut rng)
             .expect("choosing file size failed");
 
-        client.url(&format!(
-            "http://{}:80/{}", self.target, full_path))?;
+        client.url(&full_path)?;
         client.put(true)?;
         client.upload(true)?;
         client.in_filesize(size)?;
@@ -116,7 +119,7 @@ impl Backend for WebDav {
             let rtt = client.total_time().unwrap().as_millis();
 
             self.queue.lock().unwrap().insert(QueueItem{
-                obj: full_path.to_string()
+                obj: fname.to_string()
             });
             Ok(Some(WorkerInfo {
                 id: thread::current().id(),
@@ -135,7 +138,7 @@ impl Backend for WebDav {
     fn read(&self) -> Result<Option<WorkerInfo>, ChumError> {
 
         let mut client = Easy::new();
-        let path: String;
+        let fname: String;
 
         /*
          * Create a scope here to ensure that we don't keep the queue locked
@@ -149,8 +152,8 @@ impl Backend for WebDav {
             }
             let qi = qi.unwrap();
 
-            path = qi.obj.clone();
-            client.url(&format!("http://{}:80/{}", self.target, path))?;
+            fname = qi.obj.clone();
+            client.url(&self.get_path(fname.clone()))?;
         }
         client.get(true)?;
 
@@ -177,7 +180,7 @@ impl Backend for WebDav {
             }))
         } else {
             Err(ChumError::new(
-                &format!("Reading {} failed: {}", path, code)))
+                &format!("Reading {} failed: {}", fname, code)))
         }
     }
     fn delete(&self) -> Result<Option<WorkerInfo>, ChumError> {

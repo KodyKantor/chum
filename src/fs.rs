@@ -19,6 +19,7 @@ use std::thread;
 use std::time::Instant;
 use std::fs::File;
 use std::io::{Write, Read, BufWriter};
+use std::path::{Path, PathBuf};
 
 use rand::Rng;
 use rand::AsByteSliceMut;
@@ -60,10 +61,17 @@ impl Fs {
     }
 
     fn setup(&self) {
-        let directory = &format!("/{}/{}/v2/{}",
+        let directory = &format!("{}/{}/v2/{}",
                 self.basedir, DIR, DIR);
-        std::fs::create_dir_all(directory).expect("failed to create initial \
-            directory layout");
+        std::fs::create_dir_all(directory).expect("failed to create \
+            initial directory layout");
+    }
+
+    /* Common function to handle creating filesystem path. */
+    fn get_path(&self, fname: String) -> PathBuf {
+        let first_two = &fname[0..2];
+        Path::new(&format!("{}/{}/v2/{}/{}/{}",
+            self.basedir, DIR, DIR, first_two, fname)).to_path_buf()
     }
 }
 
@@ -74,12 +82,10 @@ impl Backend for Fs {
         let size = *self.distr.choose(&mut rng)
             .expect("choosing file size failed");
 
-        let first_two = &fname.to_string()[0..2];
-        let directory = &format!("/{}/{}/v2/{}/{}",
-                self.basedir, DIR, DIR, first_two);
-        let full_path = &format!("{}/{}", directory, fname);
+        let full_path = self.get_path(fname.to_string());
 
-        if let Err(_e) = std::fs::create_dir(directory) {
+        if let Err(_e) = std::fs::create_dir(
+            full_path.parent().expect("directory creation failed")) {
             /*
              * One of three cases:
              * - lack permission to create directory
@@ -154,10 +160,7 @@ impl Backend for Fs {
 
         let rtt_start = Instant::now();
 
-        let first_two = &fname.to_string()[0..2];
-        let directory = &format!("/{}/{}/v2/{}/{}",
-                self.basedir, DIR, DIR, first_two);
-        let full_path = &format!("{}/{}", directory, fname);
+        let full_path = self.get_path(fname);
     
         let mut buf = Vec::new();
         let mut file =
@@ -191,10 +194,7 @@ impl Backend for Fs {
 
         let rtt_start = Instant::now();
 
-        let first_two = &fname.to_string()[0..2];
-        let directory = &format!("/{}/{}/v2/{}/{}",
-                self.basedir, DIR, DIR, first_two);
-        let full_path = &format!("{}/{}", directory, fname);
+        let full_path = self.get_path(fname.to_string());
 
         let res = std::fs::remove_file(full_path);
 

@@ -19,6 +19,7 @@ use std::time::Instant;
 use std::env;
 use std::io::Read;
 use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
 
 use rusoto_s3::{S3Client, GetObjectRequest, PutObjectRequest,
     CreateBucketRequest, DeleteObjectRequest, S3 as S3Trait};
@@ -104,6 +105,13 @@ impl S3 {
             }
         };
     }
+
+    fn get_path(&self, fname: String) -> PathBuf {
+        let first_two = &fname[0..2];
+        Path::new(&format!("v2/{}/{}/{}",
+                DIR, first_two, fname)).to_path_buf()
+
+    }
 }
 
 impl Backend for S3 {
@@ -133,13 +141,11 @@ impl Backend for S3 {
             bytes_to_go -= self.buf.len() as u64;
         }
 
-        let first_two = &fname.to_string()[0..2];
-        let directory = &format!("v2/{}/{}", DIR, first_two);
-        let full_path = &format!("{}/{}", directory, fname);
+        let full_path = self.get_path(fname.to_string());
 
         let pr = PutObjectRequest {
             bucket: DIR.to_string(),
-            key: full_path.to_string(),
+            key: full_path.to_str().unwrap().to_string(),
             body: Some(buf.into()),
             ..Default::default()
         };
@@ -155,7 +161,7 @@ impl Backend for S3 {
             Err(e) => Err(ChumError::new(&e.to_string())),
             Ok(_) => {
                 self.queue.lock().unwrap().insert(
-                    QueueItem{ obj: full_path.to_string() }
+                    QueueItem{ obj: full_path.to_str().unwrap().to_string() }
                 );
 
                 let rtt = rtt_start.elapsed().as_millis();
