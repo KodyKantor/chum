@@ -169,10 +169,6 @@ $ cd chum
 $ cargo build
 ```
 
-## Notes
-
-The delete workload is currently only supported for the S3 client.
-
 ## License
 
 "chum" is licensed under the

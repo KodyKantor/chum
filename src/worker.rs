@@ -6,7 +6,7 @@
  * Copyright 2020 Joyent, Inc.
  */
 
-use std::sync::{Arc, Mutex, mpsc::{Sender, Receiver, TryRecvError}};
+use std::sync::{Arc, Mutex, mpsc::{Sender, SendError}};
 use std::{thread, thread::ThreadId};
 use std::time;
 use rand::prelude::*;
@@ -115,7 +115,6 @@ pub trait Backend {
 pub struct Worker {
     backend: Box<dyn Backend>,
     tx: Sender<Result<WorkerInfo, ChumError>>,
-    signal: Receiver<()>,
     pause: u64,
     ops: Vec<String>,
 }
@@ -128,7 +127,7 @@ pub struct Worker {
  * into the tx mpsc to get picked up by a statistics listener.
  */
 impl Worker {
-    pub fn new(signal: Receiver<()>, tx: Sender<Result<WorkerInfo, ChumError>>,
+    pub fn new(tx: Sender<Result<WorkerInfo, ChumError>>,
         target: String, distr: Vec<u64>, pause: u64, queue: Arc<Mutex<Queue>>,
         ops: Vec<String>) -> Worker {
 
@@ -162,37 +161,22 @@ impl Worker {
         Worker {
             backend,
             tx,
-            signal,
             pause,
             ops,
         }
     }
 
-    pub fn process_result(&self, res: Result<Option<WorkerInfo>, ChumError>) {
+    pub fn process_result(&self, res: Result<Option<WorkerInfo>, ChumError>)
+        -> Result<(), SendError<Result<WorkerInfo, ChumError>>> {
+
         match res {
             Ok(val) => if let Some(wr) = val {
-                /*
-                 * The other end of this channel is likely no longer
-                 * listening. Even though this worker performed work
-                 * that will not be accounted for, stop the worker.
-                 */
-                if self.should_stop() {
-                    return;
-                }
-
-                self.send_info(Ok(wr));
+                self.tx.send(Ok(wr))
+            } else {
+                Ok(()) /* no-op, like a read operation with an empty queue */
             },
             Err(e) => {
-                /*
-                 * There was an error but the main thread has stopped paying
-                 * attention. Just log the error and exit.
-                 */
-                if self.should_stop() {
-                    println!("worker error: {}", e.to_string());
-                    return;
-                }
-
-                self.send_info(Err(e));
+                self.tx.send(Err(e))
             }
         }
 
@@ -204,17 +188,24 @@ impl Worker {
         loop {
             /* Thread exits when it receives a signal over its channel. */
 
-            match self.ops.choose(&mut rng)
+            let res = match self.ops.choose(&mut rng)
                 .expect("choosing operation failed").as_ref() {
 
-                "r" => self.process_result(self.backend.read()),
-                "w" => self.process_result(self.backend.write()),
-                "d" => self.process_result(self.backend.delete()),
+                "r" => self.backend.read(),
+                "w" => self.backend.write(),
+                "d" => self.backend.delete(),
                 _ => panic!("unrecognized operator"),
             };
 
-            if self.should_stop() {
-                return;
+            match self.process_result(res) {
+                Ok(_) => (),
+                Err(_) => {
+                    /*
+                     * Stat thread exited, which we take to mean the workers
+                     * should exit.
+                     */
+                    return
+                }
             }
 
             self.sleep();
@@ -224,23 +215,6 @@ impl Worker {
     fn sleep(&mut self) {
         if self.pause > 0 {
             thread::sleep(time::Duration::from_millis(self.pause));
-        }
-    }
-
-    fn send_info(&self, res: Result<WorkerInfo, ChumError>) {
-        match self.tx.send(res) {
-            Ok(_) => (),
-            Err(e) => {
-                panic!(
-                    "failed to send result: {}", e.to_string());
-            }
-        };
-    }
-
-    fn should_stop(&self) -> bool {
-        match self.signal.try_recv() {
-            Ok(_) | Err(TryRecvError::Disconnected) => true,
-            Err(TryRecvError::Empty) => false,
         }
     }
 }

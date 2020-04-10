@@ -19,7 +19,7 @@ mod webdav;
 use std::env;
 use std::{thread, thread::JoinHandle};
 use std::vec::Vec;
-use std::sync::{Arc, Mutex, mpsc::channel, mpsc::Sender};
+use std::sync::{Arc, Mutex, mpsc::channel};
 use std::error::Error;
 
 use crate::queue::{Queue, QueueMode};
@@ -41,7 +41,7 @@ const DEF_DATA_CAP: &str = "0";
 
 fn usage(opts: Options, msg: &str) {
     let synopsis = "\
-        Upload files to a given WebDAV server as quickly as possible";
+        Write files to a given target as quickly as possible";
 
     let usg = format!("chum - {}", synopsis);
     println!("{}", opts.usage(&usg));
@@ -197,11 +197,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (tx, rx) = channel();
 
     let mut worker_threads: Vec<JoinHandle<_>> = Vec::new();
-    let mut worker_chan: Vec<Sender<_>> = Vec::new();
     for _ in 0..conc {
-        let (sender, signal) = channel();
-        worker_chan.push(sender);
-
         /* There must be a way to make this more elegant. */
         let ctx = tx.clone();
         let ctarg = target.clone();
@@ -210,7 +206,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let cops = ops.clone();
 
         worker_threads.push(thread::spawn(move || {
-            Worker::new(signal, ctx, ctarg,
+            Worker::new(ctx, ctarg,
                 cdistr, sleep, cq, cops).work();
         }));
     }
@@ -224,14 +220,6 @@ fn main() -> Result<(), Box<dyn Error>> {
      * When the stat thread exits we know that enough data was written.
      */
     stat_thread.join().expect("failed to join stat thread");
-
-    for sender in worker_chan {
-        match sender.send(()) {
-            Ok(_) => (),
-            Err(e) => println!("problem sending stop signal: {}",
-                e.to_string()),
-        };
-    }
 
     for hdl in worker_threads {
         hdl.join().expect("failed to join worker thread");
