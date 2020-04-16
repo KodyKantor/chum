@@ -6,26 +6,26 @@
  * Copyright 2020 Joyent, Inc.
  */
 
-use crate::worker::{Backend, DIR, WorkerInfo, Operation};
-use crate::utils::ChumError;
 use crate::queue::{Queue, QueueItem};
 use crate::state::State;
+use crate::utils::ChumError;
+use crate::worker::{Backend, Operation, WorkerInfo, DIR};
 
 use curl::easy::Easy;
 use uuid::Uuid;
 
 use rand::seq::SliceRandom;
 use rand::thread_rng;
-use rand::Rng;
 use rand::AsByteSliceMut;
+use rand::Rng;
 
-use std::vec::Vec;
+use std::sync::{mpsc::Sender, Arc, Mutex};
 use std::thread;
-use std::sync::{Arc, Mutex, mpsc::Sender};
+use std::vec::Vec;
 
 pub struct WebDav {
-    target: String,             /* target ip address */
-    distr: Arc<Vec<u64>>,       /* object size distribution */
+    target: String,       /* target ip address */
+    distr: Arc<Vec<u64>>, /* object size distribution */
     queue: Arc<Mutex<Queue>>,
     buf: Vec<u8>,
     _dtx: Option<Sender<State>>,
@@ -36,9 +36,8 @@ impl WebDav {
         target: String,
         distr: Vec<u64>,
         queue: Arc<Mutex<Queue>>,
-        dtx: Option<Sender<State>>)
-    -> WebDav {
-
+        dtx: Option<Sender<State>>,
+    ) -> WebDav {
         let mut rng = thread_rng();
 
         /*
@@ -62,13 +61,14 @@ impl WebDav {
 
     pub fn get_path(&self, fname: String) -> String {
         let first_two = &fname[0..2];
-        format!("http://{}:80/{}/v2/{}/{}/{}",
-            self.target, DIR, DIR, first_two, fname)
+        format!(
+            "http://{}:80/{}/v2/{}/{}/{}",
+            self.target, DIR, DIR, first_two, fname
+        )
     }
 }
 
 impl Backend for WebDav {
-
     fn write(&self) -> Result<Option<WorkerInfo>, ChumError> {
         /*
          * XXX it would be great if we could re-use our client, but libcurl
@@ -84,7 +84,9 @@ impl Backend for WebDav {
         let full_path = self.get_path(fname.to_string());
 
         /* Randomly choose a file size from the list. */
-        let size = *self.distr.choose(&mut rng)
+        let size = *self
+            .distr
+            .choose(&mut rng)
             .expect("choosing file size failed");
 
         client.url(&full_path)?;
@@ -125,8 +127,8 @@ impl Backend for WebDav {
             let ttfb = client.starttransfer_time().unwrap().as_millis();
             let rtt = client.total_time().unwrap().as_millis();
 
-            self.queue.lock().unwrap().insert(QueueItem{
-                obj: fname.to_string()
+            self.queue.lock().unwrap().insert(QueueItem {
+                obj: fname.to_string(),
             });
             Ok(Some(WorkerInfo {
                 id: thread::current().id(),
@@ -135,15 +137,15 @@ impl Backend for WebDav {
                 ttfb,
                 rtt,
             }))
-
         } else {
-            Err(ChumError::new(
-                &format!("Writing {} failed: {}", full_path, code)))
+            Err(ChumError::new(&format!(
+                "Writing {} failed: {}",
+                full_path, code
+            )))
         }
     }
 
     fn read(&self) -> Result<Option<WorkerInfo>, ChumError> {
-
         let mut client = Easy::new();
         let fname: String;
 
@@ -155,7 +157,7 @@ impl Backend for WebDav {
             let mut q = self.queue.lock().unwrap();
             let qi = q.get();
             if qi.is_none() {
-                return Ok(None)
+                return Ok(None);
             }
             let qi = qi.unwrap();
 
@@ -186,11 +188,15 @@ impl Backend for WebDav {
                 rtt,
             }))
         } else {
-            Err(ChumError::new(
-                &format!("Reading {} failed: {}", fname, code)))
+            Err(ChumError::new(&format!(
+                "Reading {} failed: {}",
+                fname, code
+            )))
         }
     }
     fn delete(&self) -> Result<Option<WorkerInfo>, ChumError> {
-        Err(ChumError::new("'delete' not implemented for WebDAV backends."))
+        Err(ChumError::new(
+            "'delete' not implemented for WebDAV backends.",
+        ))
     }
 }

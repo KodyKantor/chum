@@ -8,23 +8,23 @@
 
 extern crate getopts;
 
-mod worker;
-mod queue;
-mod utils;
-mod s3;
 mod fs;
-mod webdav;
+mod queue;
+mod s3;
 mod state;
+mod utils;
+mod webdav;
+mod worker;
 
 use std::env;
-use std::{thread, thread::JoinHandle};
-use std::vec::Vec;
-use std::sync::{Arc, Mutex, mpsc::channel, mpsc::Sender};
 use std::error::Error;
+use std::sync::{mpsc::channel, mpsc::Sender, Arc, Mutex};
+use std::vec::Vec;
+use std::{thread, thread::JoinHandle};
 
 use crate::queue::{Queue, QueueMode};
-use crate::worker::Worker;
 use crate::utils::*;
+use crate::worker::Worker;
 
 use getopts::Options;
 
@@ -52,72 +52,101 @@ fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
     let mut opts = Options::new();
 
-    opts.reqopt("t",
-                "target",
-                "target server",
-                "[s3|webdav|fs]:IP|PATH");
+    opts.reqopt("t", "target", "target server", "[s3|webdav|fs]:IP|PATH");
 
-    opts.optopt("c",
-                "concurrency",
-                &format!("number of concurrent threads, \
-                    default: {}", DEF_CONCURRENCY),
-                "NUM");
-    opts.optopt("s",
-                "sleep",
-                &format!("sleep duration in millis between each \
-                    upload, default: {}", DEF_SLEEP),
-                "NUM");
-    opts.optopt("d",
-                "distribution",
-                &format!("comma-separated distribution of \
-                    file sizes to upload, default: {}", DEF_DISTR),
-                "NUM:COUNT,NUM:COUNT,...");
-    opts.optopt("i",
-                "interval",
-                &format!("interval in seconds at which to \
-                    report stats, default: {}", DEF_INTERVAL),
-                "NUM");
-    opts.optopt("q",
-                "queue-mode",
-                &format!("queue mode for read operations, default: {}",
-                    DEF_QUEUE_MODE),
-                &format!("{}|{}|{}",
-                    QueueMode::Lru, QueueMode::Mru, QueueMode::Rand));
-    opts.optopt("w",
-                "workload",
-                &format!("workload of operations, default: {}",
-                    DEF_WORKLOAD),
-                "OP:COUNT,OP:COUNT");
-    opts.optopt("f",
-                 "format",
-                 &format!("statistics output format, default: {}",
-                    DEF_OUTPUT_FORMAT),
-                "h|v|t");
-    opts.optopt("m",
-                "max-data",
-                &format!("maximum amount of data to write to the target, \
-                    default: {}, '0' disables cap", DEF_DATA_CAP),
-                "CAP");
-    opts.optopt("r",
-                "read-list",
-                "path to a file listing files to read from server, \
+    opts.optopt(
+        "c",
+        "concurrency",
+        &format!(
+            "number of concurrent threads, \
+                    default: {}",
+            DEF_CONCURRENCY
+        ),
+        "NUM",
+    );
+    opts.optopt(
+        "s",
+        "sleep",
+        &format!(
+            "sleep duration in millis between each \
+                    upload, default: {}",
+            DEF_SLEEP
+        ),
+        "NUM",
+    );
+    opts.optopt(
+        "d",
+        "distribution",
+        &format!(
+            "comma-separated distribution of \
+                    file sizes to upload, default: {}",
+            DEF_DISTR
+        ),
+        "NUM:COUNT,NUM:COUNT,...",
+    );
+    opts.optopt(
+        "i",
+        "interval",
+        &format!(
+            "interval in seconds at which to \
+                    report stats, default: {}",
+            DEF_INTERVAL
+        ),
+        "NUM",
+    );
+    opts.optopt(
+        "q",
+        "queue-mode",
+        &format!(
+            "queue mode for read operations, default: {}",
+            DEF_QUEUE_MODE
+        ),
+        &format!("{}|{}|{}", QueueMode::Lru, QueueMode::Mru, QueueMode::Rand),
+    );
+    opts.optopt(
+        "w",
+        "workload",
+        &format!("workload of operations, default: {}", DEF_WORKLOAD),
+        "OP:COUNT,OP:COUNT",
+    );
+    opts.optopt(
+        "f",
+        "format",
+        &format!("statistics output format, default: {}", DEF_OUTPUT_FORMAT),
+        "h|v|t",
+    );
+    opts.optopt(
+        "m",
+        "max-data",
+        &format!(
+            "maximum amount of data to write to the target, \
+                    default: {}, '0' disables cap",
+            DEF_DATA_CAP
+        ),
+        "CAP",
+    );
+    opts.optopt(
+        "r",
+        "read-list",
+        "path to a file listing files to read from server, \
                     default: none (files are chosen from recent uploads)",
-                "FILE");
+        "FILE",
+    );
 
-    opts.optflag("h",
-                 "help",
-                 "print this help message");
-    opts.optflag("D",
-                 "debug",
-                 "enable verbose statemap tracing (may impact performance)\n\
-                 Must be used with the -m flag");
+    opts.optflag("h", "help", "print this help message");
+    opts.optflag(
+        "D",
+        "debug",
+        "enable verbose statemap tracing (may impact performance)\n\
+                 Must be used with the -m flag",
+    );
 
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => m,
         Err(f) => {
             usage(opts, &f.to_string());
-            return Ok(())
-        },
+            return Ok(());
+        }
     };
 
     if matches.opt_present("h") {
@@ -156,11 +185,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     /* Handle grabbing defaults if the user didn't provide these flags. */
     let conc = matches.opt_get_default("concurrency", DEF_CONCURRENCY)?;
     let sleep = matches.opt_get_default("sleep", DEF_SLEEP)?;
-    let interval =
-        matches.opt_get_default("interval", DEF_INTERVAL)?;
+    let interval = matches.opt_get_default("interval", DEF_INTERVAL)?;
     let qmode = matches.opt_get_default("queue-mode", DEF_QUEUE_MODE)?;
-    let format = matches.opt_get_default("format",
-        String::from(DEF_OUTPUT_FORMAT))?;
+    let format =
+        matches.opt_get_default("format", String::from(DEF_OUTPUT_FORMAT))?;
 
     let format = match format.as_str() {
         "h" => OutputFormat::Human,
@@ -168,8 +196,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         "t" => OutputFormat::Tabular,
         _ => {
             usage(opts, &format!("invalid output format '{}'", format));
-            return Ok(())
-        },
+            return Ok(());
+        }
     };
 
     let ops = if matches.opt_present("workload") {
@@ -187,7 +215,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             Ok(_) => (),
             Err(e) => {
                 usage(opts, &e.to_string());
-                return Ok(())
+                return Ok(());
             }
         }
     }
@@ -204,23 +232,30 @@ fn main() -> Result<(), Box<dyn Error>> {
         String::from(DEF_DISTR)
     };
 
-    let distr = match convert_numeric_distribution(
-        expand_distribution(&user_distr)?) {
-        Ok(d) => d,
-        Err(e) => {
-            usage(opts, &format!("invalid distribution argument '{}': {}",
-                user_distr, e.to_string()));
-            return Ok(())
-        },
-    };
+    let distr =
+        match convert_numeric_distribution(expand_distribution(&user_distr)?) {
+            Ok(d) => d,
+            Err(e) => {
+                usage(
+                    opts,
+                    &format!(
+                        "invalid distribution argument '{}': {}",
+                        user_distr,
+                        e.to_string()
+                    ),
+                );
+                return Ok(());
+            }
+        };
 
     if conc < 1 {
         usage(opts, "concurrency must be > 1");
-        return Ok(())
+        return Ok(());
     }
 
     let data_cap = parse_human(
-        &matches.opt_get_default("max-data", String::from(DEF_DATA_CAP))?)?;
+        &matches.opt_get_default("max-data", String::from(DEF_DATA_CAP))?,
+    )?;
 
     /*
      * Start the real work. Kick off worker threads and a stat listener.
@@ -239,8 +274,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let dtx = debug_tx.clone();
 
         worker_threads.push(thread::spawn(move || {
-            Worker::new(ctx, ctarg,
-                cdistr, sleep, cq, cops, dtx).work();
+            Worker::new(ctx, ctarg, cdistr, sleep, cq, cops, dtx).work();
         }));
     }
 

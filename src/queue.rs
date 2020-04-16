@@ -8,9 +8,9 @@
 
 use rand::Rng;
 
-use std::str::FromStr;
 use std::error;
 use std::fmt;
+use std::str::FromStr;
 
 /*
  * Operating modes that the queue supports. See the block comment above the
@@ -50,7 +50,7 @@ impl FromStr for QueueMode {
         };
 
         if mode.is_none() {
-            return Err(QueueModeError)
+            return Err(QueueModeError);
         }
         Ok(mode.unwrap())
     }
@@ -106,7 +106,7 @@ impl Queue {
     pub fn insert(&mut self, qi: QueueItem) {
         if self.items.len() < self.cap {
             self.items.push(qi);
-            return
+            return;
         }
 
         self.remove();
@@ -119,27 +119,30 @@ impl Queue {
      */
     pub fn get(&mut self) -> Option<&QueueItem> {
         if self.items.is_empty() {
-            return None
+            return None;
         }
 
         match self.mode {
             QueueMode::Lru => self.items.get(0),
             QueueMode::Mru => self.items.get(self.items.len()),
-            QueueMode::Rand => self.items.get(
-                rand::thread_rng().gen_range(0, self.items.len())),
+            QueueMode::Rand => self
+                .items
+                .get(rand::thread_rng().gen_range(0, self.items.len())),
         }
     }
 
     pub fn remove(&mut self) -> Option<QueueItem> {
         if self.items.is_empty() {
-            return None
+            return None;
         }
 
         match self.mode {
             QueueMode::Lru => Some(self.items.remove(0)),
             QueueMode::Mru => Some(self.items.remove(0)),
-            QueueMode::Rand => Some(self.items.remove(
-                rand::thread_rng().gen_range(0, self.items.len()))),
+            QueueMode::Rand => Some(
+                self.items
+                    .remove(rand::thread_rng().gen_range(0, self.items.len())),
+            ),
         }
     }
 }

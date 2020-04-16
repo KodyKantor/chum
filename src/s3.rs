@@ -10,31 +10,33 @@ extern crate uuid;
 
 use rand::seq::SliceRandom;
 use rand::thread_rng;
-use rand::Rng;
 use rand::AsByteSliceMut;
+use rand::Rng;
 
-use std::vec::Vec;
-use std::thread;
-use std::time::Instant;
 use std::env;
 use std::io::Read;
-use std::sync::{Arc, Mutex, mpsc::Sender};
 use std::path::{Path, PathBuf};
+use std::sync::{mpsc::Sender, Arc, Mutex};
+use std::thread;
+use std::time::Instant;
+use std::vec::Vec;
 
-use rusoto_s3::{S3Client, GetObjectRequest, PutObjectRequest,
-    CreateBucketRequest, DeleteObjectRequest, S3 as S3Trait};
-use rusoto_core::{RusotoError, Region};
+use rusoto_core::{Region, RusotoError};
 use rusoto_credential::EnvironmentProvider;
+use rusoto_s3::{
+    CreateBucketRequest, DeleteObjectRequest, GetObjectRequest,
+    PutObjectRequest, S3Client, S3 as S3Trait,
+};
 
 use uuid::Uuid;
 
 use crate::queue::{Queue, QueueItem};
-use crate::utils::ChumError;
-use crate::worker::{WorkerInfo, DIR, Backend, Operation};
 use crate::state::State;
+use crate::utils::ChumError;
+use crate::worker::{Backend, Operation, WorkerInfo, DIR};
 
 pub struct S3 {
-    distr: Arc<Vec<u64>>,       /* object size distribution */
+    distr: Arc<Vec<u64>>, /* object size distribution */
     queue: Arc<Mutex<Queue>>,
     buf: Vec<u8>,
     client: S3Client,
@@ -42,14 +44,12 @@ pub struct S3 {
 }
 
 impl S3 {
-
     pub fn new(
         target: String,
         distr: Vec<u64>,
         queue: Arc<Mutex<Queue>>,
-        dtx: Option<Sender<State>>)
-    -> S3 {
-
+        dtx: Option<Sender<State>>,
+    ) -> S3 {
         let mut rng = thread_rng();
 
         /*
@@ -82,7 +82,8 @@ impl S3 {
             rusoto_core::request::HttpClient::new()
                 .expect("failed to create S3 HTTP client"),
             EnvironmentProvider::default(),
-            region);
+            region,
+        );
 
         let mut s3 = S3 {
             distr: Arc::new(distr),
@@ -105,30 +106,27 @@ impl S3 {
 
         if let Err(e) = self.client.create_bucket(cbr).sync() {
             match e {
-                RusotoError::Service(_) => {
-                        /* bucket already created */
-                },
-                _  => panic!("Creating bucket failed: {}", e),
+                RusotoError::Service(_) => { /* bucket already created */ }
+                _ => panic!("Creating bucket failed: {}", e),
             }
         };
     }
 
     fn get_path(&self, fname: String) -> PathBuf {
         let first_two = &fname[0..2];
-        Path::new(&format!("v2/{}/{}/{}",
-                DIR, first_two, fname)).to_path_buf()
-
+        Path::new(&format!("v2/{}/{}/{}", DIR, first_two, fname)).to_path_buf()
     }
 }
 
 impl Backend for S3 {
-
     fn write(&self) -> Result<Option<WorkerInfo>, ChumError> {
         /* This should be similar to how muskie generates objectids. */
         let fname = Uuid::new_v4();
 
         let mut rng = thread_rng();
-        let size = *self.distr.choose(&mut rng)
+        let size = *self
+            .distr
+            .choose(&mut rng)
             .expect("choosing file size failed");
 
         /*
@@ -167,9 +165,9 @@ impl Backend for S3 {
         match self.client.put_object(pr).sync() {
             Err(e) => Err(ChumError::new(&e.to_string())),
             Ok(_) => {
-                self.queue.lock().unwrap().insert(
-                    QueueItem{ obj: full_path.to_str().unwrap().to_string() }
-                );
+                self.queue.lock().unwrap().insert(QueueItem {
+                    obj: full_path.to_str().unwrap().to_string(),
+                });
 
                 let rtt = rtt_start.elapsed().as_millis();
                 Ok(Some(WorkerInfo {
@@ -179,13 +177,11 @@ impl Backend for S3 {
                     ttfb: 0, /* not supported */
                     rtt,
                 }))
-            },
+            }
         }
-
     }
 
     fn read(&self) -> Result<Option<WorkerInfo>, ChumError> {
-
         /*
          * Create a scope here to ensure that we don't keep the queue locked
          * for longer than necessary.
@@ -195,7 +191,7 @@ impl Backend for S3 {
             let mut q = self.queue.lock().unwrap();
             let qi = q.get();
             if qi.is_none() {
-                return Ok(None)
+                return Ok(None);
             }
             let qi = qi.unwrap();
 
@@ -210,8 +206,9 @@ impl Backend for S3 {
 
         let rtt_start = Instant::now();
         let res = match self.client.get_object(gr).sync() {
-            Err(e) => Err(ChumError::new(&format!("failed to read {}: {}",
-                fname, e))),
+            Err(e) => {
+                Err(ChumError::new(&format!("failed to read {}: {}", fname, e)))
+            }
             Ok(res) => Ok(res),
         }?;
 
@@ -222,19 +219,21 @@ impl Backend for S3 {
         if res.body.is_some() {
             let mut stream = res.body.unwrap().into_blocking_read();
             let mut body = Vec::new();
-            stream.read_to_end(&mut body).expect("failed to read response \
-                body");
+            stream.read_to_end(&mut body).expect(
+                "failed to read response \
+                body",
+            );
         }
 
         let size = res.content_length.expect("failed to get content-length");
         let rtt = rtt_start.elapsed().as_millis();
 
         Ok(Some(WorkerInfo {
-                id: thread::current().id(),
-                op: Operation::Read,
-                size: size as u64,
-                ttfb: 0,
-                rtt,
+            id: thread::current().id(),
+            op: Operation::Read,
+            size: size as u64,
+            ttfb: 0,
+            rtt,
         }))
     }
 
@@ -244,7 +243,7 @@ impl Backend for S3 {
             let mut q = self.queue.lock().unwrap();
             let qi = q.remove();
             if qi.is_none() {
-                return Ok(None)
+                return Ok(None);
             }
             let qi = qi.unwrap();
 
@@ -266,10 +265,16 @@ impl Backend for S3 {
          * operations if there was an error during the delete.
          */
         if let Err(e) = res {
-            self.queue.lock().unwrap().insert(QueueItem{ obj: fname.clone() });
+            self.queue
+                .lock()
+                .unwrap()
+                .insert(QueueItem { obj: fname.clone() });
 
-            return Err(ChumError::new(&format!("Deleting {} \
-                failed: {}", fname, e)))
+            return Err(ChumError::new(&format!(
+                "Deleting {} \
+                failed: {}",
+                fname, e
+            )));
         }
 
         let rtt = rtt_start.elapsed().as_millis();
@@ -279,7 +284,7 @@ impl Backend for S3 {
             op: Operation::Delete,
             size: 0,
             ttfb: 0,
-            rtt
+            rtt,
         }))
     }
 }

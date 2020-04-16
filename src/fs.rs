@@ -8,32 +8,31 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::worker::{WorkerInfo, Backend, DIR, Operation};
-use crate::utils::ChumError;
 use crate::queue::{Queue, QueueItem};
 use crate::state::State;
+use crate::utils::ChumError;
+use crate::worker::{Backend, Operation, WorkerInfo, DIR};
 
 use rand::seq::SliceRandom;
 use rand::thread_rng;
-use rand::Rng;
 use rand::AsByteSliceMut;
+use rand::Rng;
 
 use chrono::{DateTime, Utc};
 
-use std::vec::Vec;
-use std::thread;
-use std::time::Instant;
 use std::fs::File;
-use std::io::{Write, Read, BufWriter};
+use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
-
+use std::thread;
+use std::time::Instant;
+use std::vec::Vec;
 
 use uuid::Uuid;
 
 pub struct Fs {
     basedir: String,
-    distr: Arc<Vec<u64>>,       /* object size distribution */
+    distr: Arc<Vec<u64>>, /* object size distribution */
     queue: Arc<Mutex<Queue>>,
     buf: Vec<u8>,
     dtx: Option<Sender<State>>,
@@ -44,8 +43,8 @@ impl Fs {
         basedir: String,
         distr: Vec<u64>,
         queue: Arc<Mutex<Queue>>,
-        dtx: Option<Sender<State>>)
-    -> Fs {
+        dtx: Option<Sender<State>>,
+    ) -> Fs {
         let mut rng = thread_rng();
 
         /*
@@ -72,17 +71,21 @@ impl Fs {
     }
 
     fn setup(&self) {
-        let directory = &format!("{}/{}/v2/{}",
-                self.basedir, DIR, DIR);
-        std::fs::create_dir_all(directory).expect("failed to create \
-            initial directory layout");
+        let directory = &format!("{}/{}/v2/{}", self.basedir, DIR, DIR);
+        std::fs::create_dir_all(directory).expect(
+            "failed to create \
+            initial directory layout",
+        );
     }
 
     /* Common function to handle creating filesystem path. */
     fn get_path(&self, fname: String) -> PathBuf {
         let first_two = &fname[0..2];
-        Path::new(&format!("{}/{}/v2/{}/{}/{}",
-            self.basedir, DIR, DIR, first_two, fname)).to_path_buf()
+        Path::new(&format!(
+            "{}/{}/v2/{}/{}/{}",
+            self.basedir, DIR, DIR, first_two, fname
+        ))
+        .to_path_buf()
     }
 
     #[allow(clippy::single_match)]
@@ -90,8 +93,8 @@ impl Fs {
         &self,
         state: &str,
         begin: DateTime<Utc>,
-        end: DateTime<Utc>) {
-
+        end: DateTime<Utc>,
+    ) {
         if let Some(c) = &self.dtx {
             match c.send(State {
                 host: format!("{:?}", thread::current().id()),
@@ -110,7 +113,9 @@ impl Backend for Fs {
     fn write(&self) -> Result<Option<WorkerInfo>, ChumError> {
         let fname = Uuid::new_v4();
         let mut rng = thread_rng();
-        let size = *self.distr.choose(&mut rng)
+        let size = *self
+            .distr
+            .choose(&mut rng)
             .expect("choosing file size failed");
 
         let full_path = self.get_path(fname.to_string());
@@ -119,7 +124,8 @@ impl Backend for Fs {
 
         begin = Utc::now();
         if let Err(_e) = std::fs::create_dir(
-            full_path.parent().expect("directory creation failed")) {
+            full_path.parent().expect("directory creation failed"),
+        ) {
             /*
              * One of three cases:
              * - lack permission to create directory
@@ -137,7 +143,6 @@ impl Backend for Fs {
         let file = File::create(full_path)?;
         end = Utc::now();
         self.send_state("write::open", begin, end);
-
 
         let mut bw = BufWriter::new(&file);
 
@@ -173,9 +178,9 @@ impl Backend for Fs {
         match file.sync_all() {
             Err(e) => Err(ChumError::new(&format!("fsync failed: {}", e))),
             Ok(_) => {
-                self.queue.lock().unwrap().insert(
-                    QueueItem{ obj: fname.to_string() }
-                );
+                self.queue.lock().unwrap().insert(QueueItem {
+                    obj: fname.to_string(),
+                });
 
                 let rtt = rtt_start.elapsed().as_millis();
                 end = Utc::now();
@@ -188,7 +193,7 @@ impl Backend for Fs {
                     ttfb: 0, /* not supported */
                     rtt,
                 }))
-            },
+            }
         }
     }
 
@@ -198,7 +203,7 @@ impl Backend for Fs {
             let mut q = self.queue.lock().unwrap();
             let qi = q.get();
             if qi.is_none() {
-                return Ok(None)
+                return Ok(None);
             }
             let qi = qi.unwrap();
 
@@ -211,11 +216,10 @@ impl Backend for Fs {
         let rtt_start = Instant::now();
 
         let full_path = self.get_path(fname);
-    
+
         let mut buf = Vec::new();
         begin = Utc::now();
-        let mut file =
-            File::open(full_path)?;
+        let mut file = File::open(full_path)?;
         end = Utc::now();
         self.send_state("read::open", begin, end);
 
@@ -241,7 +245,7 @@ impl Backend for Fs {
             let mut q = self.queue.lock().unwrap();
             let qi = q.remove();
             if qi.is_none() {
-                return Ok(None)
+                return Ok(None);
             }
             let qi = qi.unwrap();
 
@@ -260,10 +264,16 @@ impl Backend for Fs {
         self.send_state("delete::rm", begin, end);
 
         if let Err(e) = res {
-            self.queue.lock().unwrap().insert(QueueItem{ obj: fname.clone() });
+            self.queue
+                .lock()
+                .unwrap()
+                .insert(QueueItem { obj: fname.clone() });
 
-            return Err(ChumError::new(&format!("Deleting {} \
-                failed: {}", fname, e)))
+            return Err(ChumError::new(&format!(
+                "Deleting {} \
+                failed: {}",
+                fname, e
+            )));
         }
 
         let rtt = rtt_start.elapsed().as_millis();
@@ -273,7 +283,7 @@ impl Backend for Fs {
             op: Operation::Delete,
             size: 0,
             ttfb: 0,
-            rtt
+            rtt,
         }))
     }
 }

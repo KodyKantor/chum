@@ -6,16 +6,16 @@
  * Copyright 2020 Joyent, Inc.
  */
 
-use std::sync::mpsc::Receiver;
 use std::fs::File;
 use std::io::Write;
+use std::sync::mpsc::Receiver;
 
 use chrono::{DateTime, Utc};
 
 use statemap::Statemap;
 
 pub struct State {
-    pub host: String, /* Host name */
+    pub host: String,  /* Host name */
     pub state: String, /* Name of the state, e.g. "putobject" or "fsync" */
     pub start_time: DateTime<Utc>,
     pub end_time: DateTime<Utc>,
@@ -36,4 +36,3 @@ pub fn state_listener(rx: Receiver<State>) {
         f.write_all(&format!("{}\n", state).as_bytes()).unwrap();
     }
 }
-

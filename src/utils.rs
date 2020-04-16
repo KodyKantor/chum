@@ -9,17 +9,17 @@ extern crate regex;
 
 use regex::Regex;
 
-use std::error::Error;
-use std::{thread, thread::ThreadId};
-use std::{time, time::SystemTime, time::UNIX_EPOCH};
-use std::vec::Vec;
-use std::sync::{Arc, Mutex, mpsc::Receiver};
 use std::collections::HashMap;
+use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::sync::{mpsc::Receiver, Arc, Mutex};
+use std::vec::Vec;
+use std::{thread, thread::ThreadId};
+use std::{time, time::SystemTime, time::UNIX_EPOCH};
 
-use crate::worker::{WorkerInfo, WorkerStat, Operation};
 use crate::queue::{Queue, QueueItem};
+use crate::worker::{Operation, WorkerInfo, WorkerStat};
 
 #[derive(PartialEq)]
 pub enum OutputFormat {
@@ -52,8 +52,8 @@ pub fn collect_stats(
     rx: Receiver<Result<WorkerInfo, ChumError>>,
     interval: u64,
     format: OutputFormat,
-    data_cap: u64) {
-
+    data_cap: u64,
+) {
     let mut total_bytes_written: u64 = 0;
     let mut op_agg = HashMap::new();
     let start_time = SystemTime::now();
@@ -83,7 +83,7 @@ pub fn collect_stats(
                         ttfb: 0,
                         rtt: 0,
                     }
-                },
+                }
             }
 
             if wr.op == Operation::Write {
@@ -106,20 +106,25 @@ pub fn collect_stats(
         }
 
         match format {
-            OutputFormat::Human | OutputFormat::HumanVerbose => {
-                print_human(start_time, &format, op_stats, op_ticks,
-                    &mut op_agg)
-            },
-            OutputFormat::Tabular => {
-                print_tabular(start_time, &format, op_stats, op_ticks,
-                    &mut op_agg)
-            },
+            OutputFormat::Human | OutputFormat::HumanVerbose => print_human(
+                start_time,
+                &format,
+                op_stats,
+                op_ticks,
+                &mut op_agg,
+            ),
+            OutputFormat::Tabular => print_tabular(
+                start_time,
+                &format,
+                op_stats,
+                op_ticks,
+                &mut op_agg,
+            ),
         }
 
         if data_cap > 0 && total_bytes_written >= data_cap {
             return; /* Exit the thread, signalling and end of the program. */
         }
-
     }
 }
 
@@ -128,8 +133,8 @@ fn print_human(
     format: &OutputFormat,
     mut op_stats: HashMap<Operation, HashMap<ThreadId, WorkerStat>>,
     mut op_ticks: HashMap<Operation, WorkerStat>,
-    op_agg: &mut HashMap<Operation, WorkerStat>) {
-
+    op_agg: &mut HashMap<Operation, WorkerStat>,
+) {
     /* Print out the stats we gathered. */
     println!("---");
     if *format == OutputFormat::HumanVerbose {
@@ -190,8 +195,8 @@ fn print_tabular(
     _: &OutputFormat,
     _: HashMap<Operation, HashMap<ThreadId, WorkerStat>>,
     op_ticks: HashMap<Operation, WorkerStat>,
-    _: &mut HashMap<Operation, WorkerStat>) {
-
+    _: &mut HashMap<Operation, WorkerStat>,
+) {
     let zero_stat = WorkerStat::new();
     let reader_stats = match op_ticks.get(&Operation::Read) {
         Some(stats) => stats,
@@ -213,13 +218,19 @@ fn print_tabular(
         Err(_) => String::from("0"),
     };
 
-    println!("{} {} {} {} {} {} {} {} {} {}",
+    println!(
+        "{} {} {} {} {} {} {} {} {} {}",
         time,
-        reader_stats.objs, writer_stats.objs,
-        reader_stats.data,  writer_stats.data,
-        reader_stats.ttfb, writer_stats.ttfb,
-        reader_stats.rtt, writer_stats.rtt,
-        error_stats.objs);
+        reader_stats.objs,
+        writer_stats.objs,
+        reader_stats.data,
+        writer_stats.data,
+        reader_stats.ttfb,
+        writer_stats.ttfb,
+        reader_stats.rtt,
+        writer_stats.rtt,
+        error_stats.objs
+    );
 }
 
 #[derive(Debug, PartialEq)]
@@ -228,7 +239,9 @@ pub struct ChumError {
 }
 impl ChumError {
     pub fn new(msg: &str) -> Self {
-        ChumError { msg: msg.to_string() }
+        ChumError {
+            msg: msg.to_string(),
+        }
     }
 }
 impl Error for ChumError {
@@ -237,9 +250,9 @@ impl Error for ChumError {
     }
 }
 impl std::fmt::Display for ChumError {
-        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-            write!(f, "{}", self.msg)
-        }
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.msg)
+    }
 }
 /* Wrap errors from libcurl. */
 impl From<curl::Error> for ChumError {
@@ -266,10 +279,8 @@ pub fn parse_human(val: &str) -> Result<u64, ChumError> {
     let mix_re = Regex::new(r"^\d+[KMGTkmgt]$").unwrap();
     if mix_re.is_match(val) {
         let (first, last) = val.split_at(val.len() - 1);
-        let val_as_bytes: u64 =
-            u64::from_str_radix(first, 10).map_err(|err| {
-                ChumError::new(&err.to_string())
-            })?;
+        let val_as_bytes: u64 = u64::from_str_radix(first, 10)
+            .map_err(|err| ChumError::new(&err.to_string()))?;
 
         match last.to_ascii_lowercase().as_ref() {
             "k" => Ok(val_as_bytes * k),
@@ -279,8 +290,10 @@ pub fn parse_human(val: &str) -> Result<u64, ChumError> {
             _ => Err(ChumError::new("unrecognized unit suffix")),
         }
     } else {
-        Err(ChumError::new("provided value must be a positive number with a \
-            unit suffix"))
+        Err(ChumError::new(
+            "provided value must be a positive number with a \
+            unit suffix",
+        ))
     }
 }
 
@@ -310,14 +323,21 @@ pub fn expand_distribution(dstr: &str) -> Result<Vec<String>, ChumError> {
             1 => gen_distr.push(tok[0].to_string()),
             2 => {
                 for _ in 0..tok[1].parse::<u32>().map_err(|_| {
-                    ChumError::new(&format!("failed to parse '{}' as a number",
-                        tok[1]))
+                    ChumError::new(&format!(
+                        "failed to parse '{}' as a number",
+                        tok[1]
+                    ))
                 })? {
                     gen_distr.push(tok[0].to_string());
                 }
-            },
-            _ => return Err(ChumError::new(&format!("too many multiples in \
-                token '{}'", tok.join(":")))),
+            }
+            _ => {
+                return Err(ChumError::new(&format!(
+                    "too many multiples in \
+                token '{}'",
+                    tok.join(":")
+                )))
+            }
         };
     }
 
@@ -328,9 +348,9 @@ pub fn expand_distribution(dstr: &str) -> Result<Vec<String>, ChumError> {
  * Converts a distribution created by expand_distribution into a Vec of numbers
  * based on the unit size.
  */
-pub fn convert_numeric_distribution(dstr: Vec<String>)
-    -> Result<Vec<u64>, ChumError> {
-
+pub fn convert_numeric_distribution(
+    dstr: Vec<String>,
+) -> Result<Vec<u64>, ChumError> {
     let mut gen_distr = Vec::new();
 
     for s in dstr {
@@ -352,12 +372,15 @@ pub fn convert_numeric_distribution(dstr: Vec<String>)
  * The default errors we get from the OS and the uuid crate are pretty plain, so
  * we wrap them in a more helpful ChumError.
  */
-pub fn populate_queue(queue: Arc<Mutex<Queue>>, readlist: String)
-    -> Result<(), ChumError> {
-
+pub fn populate_queue(
+    queue: Arc<Mutex<Queue>>,
+    readlist: String,
+) -> Result<(), ChumError> {
     let file = File::open(readlist).map_err(|e| {
-        ChumError::new(&format!("failed to open read listing file: {}",
-            e.to_string()))
+        ChumError::new(&format!(
+            "failed to open read listing file: {}",
+            e.to_string()
+        ))
     })?;
     let br = BufReader::new(file);
 
@@ -367,11 +390,12 @@ pub fn populate_queue(queue: Arc<Mutex<Queue>>, readlist: String)
             Ok(x) => x,
             Err(_) => {
                 return Err(ChumError::new(
-                    "failed to read line from read listing file"))
-            },
+                    "failed to read line from read listing file",
+                ))
+            }
         };
 
-        q.insert(QueueItem{ obj: pathstr });
+        q.insert(QueueItem { obj: pathstr });
     }
 
     Ok(())
@@ -388,17 +412,42 @@ mod tests {
         assert_eq!(parse_human("1g")?, 1073741824);
         assert_eq!(parse_human("1T")?, 1099511627776);
 
-        assert_eq!(parse_human("1Y"), Err(ChumError::new("provided value \
-            must be a positive number with a unit suffix")));
-        assert_eq!(parse_human("1024b"), Err(ChumError::new("provided value \
-            must be a positive number with a unit suffix")));
-        assert_eq!(parse_human("1234"), Err(ChumError::new("provided value \
-            must be a positive number with a unit suffix")));
+        assert_eq!(
+            parse_human("1Y"),
+            Err(ChumError::new(
+                "provided value \
+            must be a positive number with a unit suffix"
+            ))
+        );
+        assert_eq!(
+            parse_human("1024b"),
+            Err(ChumError::new(
+                "provided value \
+            must be a positive number with a unit suffix"
+            ))
+        );
+        assert_eq!(
+            parse_human("1234"),
+            Err(ChumError::new(
+                "provided value \
+            must be a positive number with a unit suffix"
+            ))
+        );
 
-        assert_eq!(parse_human("-1G"), Err(ChumError::new("provided value \
-            must be a positive number with a unit suffix")));
-        assert_eq!(parse_human("T1"), Err(ChumError::new("provided value \
-            must be a positive number with a unit suffix")));
+        assert_eq!(
+            parse_human("-1G"),
+            Err(ChumError::new(
+                "provided value \
+            must be a positive number with a unit suffix"
+            ))
+        );
+        assert_eq!(
+            parse_human("T1"),
+            Err(ChumError::new(
+                "provided value \
+            must be a positive number with a unit suffix"
+            ))
+        );
         Ok(())
     }
 
@@ -412,32 +461,46 @@ mod tests {
     #[test]
     fn test_expand_distribution() -> Result<(), ChumError> {
         assert_eq!(expand_distribution("1,2,3")?, vec!["1", "2", "3"]);
-        assert_eq!(expand_distribution("1:2,2:2,3:1")?,
-            vec!["1", "1", "2", "2", "3"]);
+        assert_eq!(
+            expand_distribution("1:2,2:2,3:1")?,
+            vec!["1", "1", "2", "2", "3"]
+        );
         assert_eq!(expand_distribution("hello:1")?, vec!["hello"]);
 
-        assert_eq!(expand_distribution("1:2:3"),
-            Err(ChumError::new("too many multiples in token '1:2:3'")));
-        assert_eq!(expand_distribution("1:cat"),
-            Err(ChumError::new("failed to parse 'cat' as a number")));
+        assert_eq!(
+            expand_distribution("1:2:3"),
+            Err(ChumError::new("too many multiples in token '1:2:3'"))
+        );
+        assert_eq!(
+            expand_distribution("1:cat"),
+            Err(ChumError::new("failed to parse 'cat' as a number"))
+        );
 
         Ok(())
     }
 
     #[test]
     fn test_convert_numeric_distribution() -> Result<(), ChumError> {
-        assert_eq!(convert_numeric_distribution(
-            expand_distribution("1k,2k,3k")?)?, vec![1024, 2048, 3072]);
+        assert_eq!(
+            convert_numeric_distribution(expand_distribution("1k,2k,3k")?)?,
+            vec![1024, 2048, 3072]
+        );
 
-        assert_eq!(convert_numeric_distribution(
-            expand_distribution("1,2,3")?),
-            Err(ChumError::new("provided value must be a positive number \
-                with a unit suffix")));
+        assert_eq!(
+            convert_numeric_distribution(expand_distribution("1,2,3")?),
+            Err(ChumError::new(
+                "provided value must be a positive number \
+                with a unit suffix"
+            ))
+        );
 
-        assert_eq!(convert_numeric_distribution(
-            expand_distribution("a,b,c")?),
-            Err(ChumError::new("provided value must be a positive number \
-                with a unit suffix")));
+        assert_eq!(
+            convert_numeric_distribution(expand_distribution("a,b,c")?),
+            Err(ChumError::new(
+                "provided value must be a positive number \
+                with a unit suffix"
+            ))
+        );
 
         Ok(())
     }

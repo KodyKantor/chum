@@ -6,17 +6,20 @@
  * Copyright 2020 Joyent, Inc.
  */
 
-use std::sync::{Arc, Mutex, mpsc::{Sender, SendError}};
-use std::{thread, thread::ThreadId};
-use std::time;
 use rand::prelude::*;
+use std::sync::{
+    mpsc::{SendError, Sender},
+    Arc, Mutex,
+};
+use std::time;
+use std::{thread, thread::ThreadId};
 
-use crate::queue::Queue;
-use crate::utils::ChumError;
-use crate::s3::S3;
 use crate::fs::Fs;
-use crate::webdav::WebDav;
+use crate::queue::Queue;
+use crate::s3::S3;
 use crate::state::State;
+use crate::utils::ChumError;
+use crate::webdav::WebDav;
 
 pub const DIR: &str = "chum";
 
@@ -24,9 +27,9 @@ pub const DIR: &str = "chum";
 pub struct WorkerInfo {
     pub id: ThreadId,
     pub op: Operation, /* e.g. 'read' or 'write' */
-    pub size: u64, /* in bytes */
-    pub ttfb: u128, /* millis */
-    pub rtt: u128, /* millis */
+    pub size: u64,     /* in bytes */
+    pub ttfb: u128,    /* millis */
+    pub rtt: u128,     /* millis */
 }
 
 /*
@@ -69,9 +72,13 @@ impl WorkerStat {
 
     /* For easy printing when the caller doesn't care about time. */
     pub fn serialize_relative(&mut self) -> String {
-        format!("{} objects, {}, avg ttfb {}ms, avg rtt {}ms", self.objs,
-            bytes_to_human(self.data), self.ttfb / u128::from(self.objs),
-            self.rtt / u128::from(self.objs))
+        format!(
+            "{} objects, {}, avg ttfb {}ms, avg rtt {}ms",
+            self.objs,
+            bytes_to_human(self.data),
+            self.ttfb / u128::from(self.objs),
+            self.rtt / u128::from(self.objs)
+        )
     }
 
     /*
@@ -79,11 +86,15 @@ impl WorkerStat {
      * average throughput).
      */
     pub fn serialize_absolute(&mut self, d: u64) -> String {
-        format!("{} objects, {}, {}s, avg {} objs/s, avg {}/s",
-            self.objs, bytes_to_human(self.data),
-            d, self.objs / d, bytes_to_human(self.data / d))
+        format!(
+            "{} objects, {}, {}s, avg {} objs/s, avg {}/s",
+            self.objs,
+            bytes_to_human(self.data),
+            d,
+            self.objs / d,
+            bytes_to_human(self.data / d)
+        )
     }
-
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -134,9 +145,8 @@ impl Worker {
         pause: u64,
         queue: Arc<Mutex<Queue>>,
         ops: Vec<String>,
-        dtx: Option<Sender<State>>)
-    -> Worker {
-
+        dtx: Option<Sender<State>>,
+    ) -> Worker {
         let tok: Vec<&str> = target.split(':').collect();
         let protocol = tok[0].to_ascii_lowercase(); /* e.g. 's3' or 'webdav'. */
         let target = tok[1].to_string();
@@ -150,17 +160,10 @@ impl Worker {
          */
         let backend: Box<dyn Backend> = match protocol.as_ref() {
             "webdav" => {
-                Box::new(WebDav::new(target, distr,
-                    Arc::clone(&queue), dtx))
-            },
-            "s3" => {
-                Box::new(S3::new(target, distr,
-                    Arc::clone(&queue), dtx))
-            },
-            "fs" => {
-                Box::new(Fs::new(target, distr,
-                    Arc::clone(&queue), dtx))
+                Box::new(WebDav::new(target, distr, Arc::clone(&queue), dtx))
             }
+            "s3" => Box::new(S3::new(target, distr, Arc::clone(&queue), dtx)),
+            "fs" => Box::new(Fs::new(target, distr, Arc::clone(&queue), dtx)),
             _ => panic!("unknown client protocol"),
         };
 
@@ -172,20 +175,20 @@ impl Worker {
         }
     }
 
-    pub fn process_result(&self, res: Result<Option<WorkerInfo>, ChumError>)
-        -> Result<(), SendError<Result<WorkerInfo, ChumError>>> {
-
+    pub fn process_result(
+        &self,
+        res: Result<Option<WorkerInfo>, ChumError>,
+    ) -> Result<(), SendError<Result<WorkerInfo, ChumError>>> {
         match res {
-            Ok(val) => if let Some(wr) = val {
-                self.tx.send(Ok(wr))
-            } else {
-                Ok(()) /* no-op, like a read operation with an empty queue */
-            },
-            Err(e) => {
-                self.tx.send(Err(e))
+            Ok(val) => {
+                if let Some(wr) = val {
+                    self.tx.send(Ok(wr))
+                } else {
+                    Ok(()) /* no-op, like a read operation with an empty queue */
+                }
             }
+            Err(e) => self.tx.send(Err(e)),
         }
-
     }
 
     pub fn work(&mut self) {
@@ -194,9 +197,12 @@ impl Worker {
         loop {
             /* Thread exits when it receives a signal over its channel. */
 
-            let res = match self.ops.choose(&mut rng)
-                .expect("choosing operation failed").as_ref() {
-
+            let res = match self
+                .ops
+                .choose(&mut rng)
+                .expect("choosing operation failed")
+                .as_ref()
+            {
                 "r" => self.backend.read(),
                 "w" => self.backend.write(),
                 "d" => self.backend.delete(),
@@ -210,7 +216,7 @@ impl Worker {
                      * Stat thread exited, which we take to mean the workers
                      * should exit.
                      */
-                    return
+                    return;
                 }
             }
 
