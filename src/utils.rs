@@ -86,7 +86,6 @@ pub fn collect_stats(
                 },
             }
 
-            /* XXX make an enum. */
             if wr.op == Operation::Write {
                 total_bytes_written += wr.size;
             }
@@ -245,12 +244,12 @@ impl std::fmt::Display for ChumError {
 /* Wrap errors from libcurl. */
 impl From<curl::Error> for ChumError {
     fn from(err: curl::Error) -> Self {
-        ChumError::new(err.description())
+        ChumError::new(&format!("{}", err))
     }
 }
 impl From<std::io::Error> for ChumError {
     fn from(err: std::io::Error) -> Self {
-        ChumError::new(err.description())
+        ChumError::new(&format!("{}", err))
     }
 }
 

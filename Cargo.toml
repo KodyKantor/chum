@@ -13,3 +13,5 @@ curl = "0.4"
 rusoto_s3 = "0.42.0"
 rusoto_core = "0.42.0"
 rusoto_credential = "0.42.0"
+statemap = { git = "https://github.com/kodykantor/rust-statemap" }
+chrono = "0.4"

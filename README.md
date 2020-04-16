@@ -127,6 +127,9 @@ Options:
                         path to a file listing files to read from server,
                         default: none (files are chosen from recent uploads)
     -h, --help          print this help message
+    -D, --debug         enable verbose statemap tracing (may impact
+                        performance)
+                        Must be used with the -m flag
 ```
 
 A target is required at a minimum:
@@ -168,6 +171,16 @@ To build:
 $ cd chum
 $ cargo build
 ```
+
+## Statemaps
+
+manta-chum can optionally track its states and output them in the
+[statemap](https://github.com/joyent/statemap) format.
+
+This behavior is enabled with the `-D` flag. The statemap data points are
+written to `states.out` in the working directory. This data file can then be
+passed into the `statemap` tool. See the statemap documentation in its
+repository for more information.
 
 ## License
 

@@ -11,15 +11,15 @@ extern crate getopts;
 mod worker;
 mod queue;
 mod utils;
-
 mod s3;
 mod fs;
 mod webdav;
+mod state;
 
 use std::env;
 use std::{thread, thread::JoinHandle};
 use std::vec::Vec;
-use std::sync::{Arc, Mutex, mpsc::channel};
+use std::sync::{Arc, Mutex, mpsc::channel, mpsc::Sender};
 use std::error::Error;
 
 use crate::queue::{Queue, QueueMode};
@@ -107,6 +107,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     opts.optflag("h",
                  "help",
                  "print this help message");
+    opts.optflag("D",
+                 "debug",
+                 "enable verbose statemap tracing (may impact performance)\n\
+                 Must be used with the -m flag");
 
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => m,
@@ -120,6 +124,34 @@ fn main() -> Result<(), Box<dyn Error>> {
         usage(opts, "");
         return Ok(());
     }
+
+    let (tx, rx) = channel();
+    let mut debug_tx: Option<Sender<state::State>> = None;
+    //let mut smap_thread: Option<JoinHandle<_>> = None;
+
+    let smap_thread = if matches.opt_present("D") {
+        /*
+         * The statemap format isn't a streaming format, so we need the states
+         * to stop coming (i.e. the program ends) at some point. The only ways
+         * to end the program are to:
+         * - use a data cap
+         * - send a signal
+         *
+         * I don't want to go through the signal handling dance, so a data cap
+         * is the only way to end manta-chum in a quiescent manner.
+         */
+        if !matches.opt_present("m") {
+            usage(opts, "-D flag must be used with -m flag");
+            return Ok(());
+        }
+
+        debug_tx = Some(tx);
+        Some(thread::spawn(move || {
+            state::state_listener(rx);
+        }))
+    } else {
+        None
+    };
 
     /* Handle grabbing defaults if the user didn't provide these flags. */
     let conc = matches.opt_get_default("concurrency", DEF_CONCURRENCY)?;
@@ -204,10 +236,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         let cdistr = distr.clone();
         let cq = q.clone();
         let cops = ops.clone();
+        let dtx = debug_tx.clone();
 
         worker_threads.push(thread::spawn(move || {
             Worker::new(ctx, ctarg,
-                cdistr, sleep, cq, cops).work();
+                cdistr, sleep, cq, cops, dtx).work();
         }));
     }
 
@@ -217,12 +250,26 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
 
     /*
+     * To make sure that the state thread exits when all worker threads exit,
+     * drop our copy of the sender channel here.
+     *
+     * The state collection thread exits when all senders exit. This main
+     * thread will live the life of the program and it will not send any states
+     * through the channel.
+     */
+    drop(debug_tx);
+
+    /*
      * When the stat thread exits we know that enough data was written.
      */
     stat_thread.join().expect("failed to join stat thread");
 
     for hdl in worker_threads {
         hdl.join().expect("failed to join worker thread");
+    }
+
+    if let Some(jh) = smap_thread {
+        jh.join().expect("failed to join statemap thread");
     }
 
     Ok(())

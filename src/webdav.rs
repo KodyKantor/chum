@@ -9,6 +9,7 @@
 use crate::worker::{Backend, DIR, WorkerInfo, Operation};
 use crate::utils::ChumError;
 use crate::queue::{Queue, QueueItem};
+use crate::state::State;
 
 use curl::easy::Easy;
 use uuid::Uuid;
@@ -20,18 +21,23 @@ use rand::AsByteSliceMut;
 
 use std::vec::Vec;
 use std::thread;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc::Sender};
 
 pub struct WebDav {
     target: String,             /* target ip address */
     distr: Arc<Vec<u64>>,       /* object size distribution */
     queue: Arc<Mutex<Queue>>,
     buf: Vec<u8>,
+    _dtx: Option<Sender<State>>,
 }
 
 impl WebDav {
-    pub fn new(target: String, distr: Vec<u64>, queue: Arc<Mutex<Queue>>)
-        -> WebDav {
+    pub fn new(
+        target: String,
+        distr: Vec<u64>,
+        queue: Arc<Mutex<Queue>>,
+        dtx: Option<Sender<State>>)
+    -> WebDav {
 
         let mut rng = thread_rng();
 
@@ -50,6 +56,7 @@ impl WebDav {
             distr: Arc::new(distr),
             queue: Arc::clone(&queue),
             buf: vec,
+            _dtx: dtx,
         }
     }
 

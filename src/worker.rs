@@ -16,6 +16,7 @@ use crate::utils::ChumError;
 use crate::s3::S3;
 use crate::fs::Fs;
 use crate::webdav::WebDav;
+use crate::state::State;
 
 pub const DIR: &str = "chum";
 
@@ -105,7 +106,6 @@ impl std::fmt::Display for Operation {
     }
 }
 
-
 pub trait Backend {
     fn write(&self) -> Result<Option<WorkerInfo>, ChumError>;
     fn read(&self) -> Result<Option<WorkerInfo>, ChumError>;
@@ -127,9 +127,15 @@ pub struct Worker {
  * into the tx mpsc to get picked up by a statistics listener.
  */
 impl Worker {
-    pub fn new(tx: Sender<Result<WorkerInfo, ChumError>>,
-        target: String, distr: Vec<u64>, pause: u64, queue: Arc<Mutex<Queue>>,
-        ops: Vec<String>) -> Worker {
+    pub fn new(
+        tx: Sender<Result<WorkerInfo, ChumError>>,
+        target: String,
+        distr: Vec<u64>,
+        pause: u64,
+        queue: Arc<Mutex<Queue>>,
+        ops: Vec<String>,
+        dtx: Option<Sender<State>>)
+    -> Worker {
 
         let tok: Vec<&str> = target.split(':').collect();
         let protocol = tok[0].to_ascii_lowercase(); /* e.g. 's3' or 'webdav'. */
@@ -145,15 +151,15 @@ impl Worker {
         let backend: Box<dyn Backend> = match protocol.as_ref() {
             "webdav" => {
                 Box::new(WebDav::new(target, distr,
-                    Arc::clone(&queue)))
+                    Arc::clone(&queue), dtx))
             },
             "s3" => {
                 Box::new(S3::new(target, distr,
-                    Arc::clone(&queue)))
+                    Arc::clone(&queue), dtx))
             },
             "fs" => {
                 Box::new(Fs::new(target, distr,
-                    Arc::clone(&queue)))
+                    Arc::clone(&queue), dtx))
             }
             _ => panic!("unknown client protocol"),
         };

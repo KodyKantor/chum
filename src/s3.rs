@@ -18,7 +18,7 @@ use std::thread;
 use std::time::Instant;
 use std::env;
 use std::io::Read;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc::Sender};
 use std::path::{Path, PathBuf};
 
 use rusoto_s3::{S3Client, GetObjectRequest, PutObjectRequest,
@@ -31,18 +31,24 @@ use uuid::Uuid;
 use crate::queue::{Queue, QueueItem};
 use crate::utils::ChumError;
 use crate::worker::{WorkerInfo, DIR, Backend, Operation};
+use crate::state::State;
 
 pub struct S3 {
     distr: Arc<Vec<u64>>,       /* object size distribution */
     queue: Arc<Mutex<Queue>>,
     buf: Vec<u8>,
     client: S3Client,
+    _dtx: Option<Sender<State>>,
 }
 
 impl S3 {
 
-    pub fn new(target: String, distr: Vec<u64>, queue: Arc<Mutex<Queue>>)
-        -> S3 {
+    pub fn new(
+        target: String,
+        distr: Vec<u64>,
+        queue: Arc<Mutex<Queue>>,
+        dtx: Option<Sender<State>>)
+    -> S3 {
 
         let mut rng = thread_rng();
 
@@ -82,7 +88,8 @@ impl S3 {
             distr: Arc::new(distr),
             queue: Arc::clone(&queue),
             buf: vec,
-            client
+            client,
+            _dtx: dtx,
         };
 
         s3.setup();

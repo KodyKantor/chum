@@ -11,18 +11,23 @@ use std::sync::{Arc, Mutex};
 use crate::worker::{WorkerInfo, Backend, DIR, Operation};
 use crate::utils::ChumError;
 use crate::queue::{Queue, QueueItem};
+use crate::state::State;
 
 use rand::seq::SliceRandom;
 use rand::thread_rng;
+use rand::Rng;
+use rand::AsByteSliceMut;
+
+use chrono::{DateTime, Utc};
+
 use std::vec::Vec;
 use std::thread;
 use std::time::Instant;
 use std::fs::File;
 use std::io::{Write, Read, BufWriter};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::Sender;
 
-use rand::Rng;
-use rand::AsByteSliceMut;
 
 use uuid::Uuid;
 
@@ -31,11 +36,16 @@ pub struct Fs {
     distr: Arc<Vec<u64>>,       /* object size distribution */
     queue: Arc<Mutex<Queue>>,
     buf: Vec<u8>,
+    dtx: Option<Sender<State>>,
 }
 
 impl Fs {
-    pub fn new(basedir: String, distr: Vec<u64>, queue: Arc<Mutex<Queue>>)
-        -> Fs {
+    pub fn new(
+        basedir: String,
+        distr: Vec<u64>,
+        queue: Arc<Mutex<Queue>>,
+        dtx: Option<Sender<State>>)
+    -> Fs {
         let mut rng = thread_rng();
 
         /*
@@ -53,6 +63,7 @@ impl Fs {
             distr: Arc::new(distr),
             queue: Arc::clone(&queue),
             buf: vec,
+            dtx,
         };
 
         fs.setup();
@@ -73,6 +84,26 @@ impl Fs {
         Path::new(&format!("{}/{}/v2/{}/{}/{}",
             self.basedir, DIR, DIR, first_two, fname)).to_path_buf()
     }
+
+    #[allow(clippy::single_match)]
+    fn send_state(
+        &self,
+        state: &str,
+        begin: DateTime<Utc>,
+        end: DateTime<Utc>) {
+
+        if let Some(c) = &self.dtx {
+            match c.send(State {
+                host: format!("{:?}", thread::current().id()),
+                state: state.to_owned(),
+                start_time: begin,
+                end_time: end,
+            }) {
+                Ok(_) => (),
+                Err(_) => (),
+            }
+        }
+    }
 }
 
 impl Backend for Fs {
@@ -83,7 +114,10 @@ impl Backend for Fs {
             .expect("choosing file size failed");
 
         let full_path = self.get_path(fname.to_string());
+        let mut begin: DateTime<Utc>;
+        let mut end: DateTime<Utc>;
 
+        begin = Utc::now();
         if let Err(_e) = std::fs::create_dir(
             full_path.parent().expect("directory creation failed")) {
             /*
@@ -96,8 +130,14 @@ impl Backend for Fs {
              * what the error was, so we just do nothing here.
              */
         }
+        end = Utc::now();
+        self.send_state("write::mkdir", begin, end);
 
+        begin = Utc::now();
         let file = File::create(full_path)?;
+        end = Utc::now();
+        self.send_state("write::open", begin, end);
+
 
         let mut bw = BufWriter::new(&file);
 
@@ -123,9 +163,13 @@ impl Backend for Fs {
          *
          * Durability is a constraint, not a feature!
          */
+        begin = Utc::now();
         bw.write_all(&buf)?;
         bw.flush()?;
+        end = Utc::now();
+        self.send_state("write::write", begin, end);
 
+        begin = Utc::now();
         match file.sync_all() {
             Err(e) => Err(ChumError::new(&format!("fsync failed: {}", e))),
             Ok(_) => {
@@ -134,6 +178,9 @@ impl Backend for Fs {
                 );
 
                 let rtt = rtt_start.elapsed().as_millis();
+                end = Utc::now();
+                self.send_state("write::fsync", begin, end);
+
                 Ok(Some(WorkerInfo {
                     id: thread::current().id(),
                     op: Operation::Write,
@@ -158,15 +205,24 @@ impl Backend for Fs {
             fname = qi.obj.clone();
         }
 
+        let mut begin: DateTime<Utc>;
+        let mut end: DateTime<Utc>;
+
         let rtt_start = Instant::now();
 
         let full_path = self.get_path(fname);
     
         let mut buf = Vec::new();
+        begin = Utc::now();
         let mut file =
             File::open(full_path)?;
+        end = Utc::now();
+        self.send_state("read::open", begin, end);
 
+        begin = Utc::now();
         let size = file.read_to_end(&mut buf)?;
+        end = Utc::now();
+        self.send_state("read::read", begin, end);
 
         let rtt = rtt_start.elapsed().as_millis();
 
@@ -191,12 +247,17 @@ impl Backend for Fs {
 
             fname = qi.obj;
         }
+        let begin: DateTime<Utc>;
+        let end: DateTime<Utc>;
 
+        begin = Utc::now();
         let rtt_start = Instant::now();
 
         let full_path = self.get_path(fname.to_string());
 
         let res = std::fs::remove_file(full_path);
+        end = Utc::now();
+        self.send_state("delete::rm", begin, end);
 
         if let Err(e) = res {
             self.queue.lock().unwrap().insert(QueueItem{ obj: fname.clone() });
