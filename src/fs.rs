@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use crate::queue::{Queue, QueueItem};
 use crate::state::State;
 use crate::utils::ChumError;
-use crate::worker::{Backend, Operation, WorkerInfo, DIR};
+use crate::worker::*;
 
 use rand::seq::SliceRandom;
 use rand::thread_rng;
@@ -36,6 +36,7 @@ pub struct Fs {
     queue: Arc<Mutex<Queue>>,
     buf: Vec<u8>,
     dtx: Option<Sender<State>>,
+    wopts: WorkerOptions,
 }
 
 impl Fs {
@@ -44,6 +45,7 @@ impl Fs {
         distr: Vec<u64>,
         queue: Arc<Mutex<Queue>>,
         dtx: Option<Sender<State>>,
+        wopts: WorkerOptions,
     ) -> Fs {
         let mut rng = thread_rng();
 
@@ -63,6 +65,7 @@ impl Fs {
             queue: Arc::clone(&queue),
             buf: vec,
             dtx,
+            wopts,
         };
 
         fs.setup();
@@ -161,12 +164,10 @@ impl Backend for Fs {
         let rtt_start = Instant::now();
 
         /*
-         * Write the data to the file and then issue an fsync. fsync is
-         * VERY important. I shouldn't have to say that, but many storage
-         * systems in the real world do not perform synchronous IO because
-         * the implementors feel that speed is more important than durability.
+         * Write the data to the file and then optionally issue an fsync.
          *
-         * Durability is a constraint, not a feature!
+         * Durability is a constraint, not a feature, at least in this
+         * implementor's opinion.
          */
         begin = Utc::now();
         bw.write_all(&buf)?;
@@ -174,26 +175,44 @@ impl Backend for Fs {
         end = Utc::now();
         self.send_state("write::write", begin, end);
 
-        begin = Utc::now();
-        match file.sync_all() {
-            Err(e) => Err(ChumError::new(&format!("fsync failed: {}", e))),
-            Ok(_) => {
-                self.queue.lock().unwrap().insert(QueueItem {
-                    obj: fname.to_string(),
-                });
+        if self.wopts.sync {
+            begin = Utc::now();
+            match file.sync_all() {
+                Err(e) => {
+                    Err(ChumError::new(&format!("fsync failed: {}", e)))
+                },
+                Ok(_) => {
+                    self.queue.lock().unwrap().insert(QueueItem {
+                        obj: fname.to_string(),
+                    });
 
-                let rtt = rtt_start.elapsed().as_millis();
-                end = Utc::now();
-                self.send_state("write::fsync", begin, end);
+                    let rtt = rtt_start.elapsed().as_millis();
+                    end = Utc::now();
+                    self.send_state("write::fsync", begin, end);
 
-                Ok(Some(WorkerInfo {
-                    id: thread::current().id(),
-                    op: Operation::Write,
-                    size,
-                    ttfb: 0, /* not supported */
-                    rtt,
-                }))
+                    Ok(Some(WorkerInfo {
+                        id: thread::current().id(),
+                        op: Operation::Write,
+                        size,
+                        ttfb: 0, /* not supported */
+                        rtt,
+                    }))
+                }
             }
+        }
+        else {
+            self.queue.lock().unwrap().insert(QueueItem {
+                obj: fname.to_string(),
+            });
+
+            let rtt = rtt_start.elapsed().as_millis();
+            Ok(Some(WorkerInfo {
+                id: thread::current().id(),
+                op: Operation::Write,
+                size,
+                ttfb: 0, /* not supported */
+                rtt,
+            }))
         }
     }
 
