@@ -24,7 +24,7 @@ use std::{thread, thread::JoinHandle};
 
 use crate::queue::{Queue, QueueMode};
 use crate::utils::*;
-use crate::worker::Worker;
+use crate::worker::{Worker, WorkerOptions};
 
 use getopts::Options;
 
@@ -140,6 +140,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         "enable verbose statemap tracing (may impact performance)\n\
                  Must be used with the -m flag",
     );
+    opts.optflag(
+        "",
+        "no-sync",
+        "disable synchronous writes",
+    );
 
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => m,
@@ -156,7 +161,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let (tx, rx) = channel();
     let mut debug_tx: Option<Sender<state::State>> = None;
-    //let mut smap_thread: Option<JoinHandle<_>> = None;
 
     let smap_thread = if matches.opt_present("D") {
         /*
@@ -206,6 +210,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         String::from(DEF_WORKLOAD)
     };
     let ops = expand_distribution(&ops)?;
+
+    let workeropts = WorkerOptions {
+        sync: !matches.opt_present("no-sync"),
+    };
 
     let q = Arc::new(Mutex::new(Queue::new(qmode, DEF_QUEUE_CAP)));
 
@@ -272,9 +280,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         let cq = q.clone();
         let cops = ops.clone();
         let dtx = debug_tx.clone();
+        let wo = workeropts.clone();
 
         worker_threads.push(thread::spawn(move || {
-            Worker::new(ctx, ctarg, cdistr, sleep, cq, cops, dtx).work();
+            Worker::new(
+                ctx, ctarg, cdistr, sleep, cq, cops, dtx, wo).work();
         }));
     }
 

@@ -23,6 +23,11 @@ use crate::webdav::WebDav;
 
 pub const DIR: &str = "chum";
 
+#[derive(Clone)]
+pub struct WorkerOptions {
+    pub sync: bool,
+}
+
 #[derive(Debug)]
 pub struct WorkerInfo {
     pub id: ThreadId,
@@ -146,6 +151,7 @@ impl Worker {
         queue: Arc<Mutex<Queue>>,
         ops: Vec<String>,
         dtx: Option<Sender<State>>,
+        wopts: WorkerOptions,
     ) -> Worker {
         let tok: Vec<&str> = target.split(':').collect();
         let protocol = tok[0].to_ascii_lowercase(); /* e.g. 's3' or 'webdav'. */
@@ -163,7 +169,7 @@ impl Worker {
                 Box::new(WebDav::new(target, distr, Arc::clone(&queue), dtx))
             }
             "s3" => Box::new(S3::new(target, distr, Arc::clone(&queue), dtx)),
-            "fs" => Box::new(Fs::new(target, distr, Arc::clone(&queue), dtx)),
+            "fs" => Box::new(Fs::new(target, distr, Arc::clone(&queue), dtx, wopts)),
             _ => panic!("unknown client protocol"),
         };
 
