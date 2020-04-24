@@ -34,7 +34,6 @@ const DEF_SLEEP: u64 = 0;
 const DEF_DISTR: &str = "128k,256k,512k";
 const DEF_INTERVAL: u64 = 2;
 const DEF_QUEUE_MODE: QueueMode = QueueMode::Rand;
-const DEF_QUEUE_CAP: usize = 1_000_000;
 const DEF_WORKLOAD: &str = "r,w";
 const DEF_OUTPUT_FORMAT: &str = "h";
 const DEF_DATA_CAP: &str = "0";
@@ -140,11 +139,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "enable verbose statemap tracing (may impact performance)\n\
                  Must be used with the -m flag",
     );
-    opts.optflag(
-        "",
-        "no-sync",
-        "disable synchronous writes",
-    );
+    opts.optflag("", "no-sync", "disable synchronous writes");
 
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => m,
@@ -211,11 +206,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
     let ops = expand_distribution(&ops)?;
 
-    let workeropts = WorkerOptions {
+    let mut workeropts = WorkerOptions {
         sync: !matches.opt_present("no-sync"),
+        read_queue: false,
     };
+    if ops.contains(&"r".to_owned()) || ops.contains(&"d".to_owned()) {
+        workeropts.read_queue = true;
+    }
 
-    let q = Arc::new(Mutex::new(Queue::new(qmode, DEF_QUEUE_CAP)));
+    let q = Arc::new(Mutex::new(Queue::new(qmode)));
 
     if matches.opt_present("read-list") {
         let readlist = matches.opt_str("read-list").unwrap();
@@ -283,8 +282,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let wo = workeropts.clone();
 
         worker_threads.push(thread::spawn(move || {
-            Worker::new(
-                ctx, ctarg, cdistr, sleep, cq, cops, dtx, wo).work();
+            Worker::new(ctx, ctarg, cdistr, sleep, cq, cops, dtx, wo).work();
         }));
     }
 

@@ -9,7 +9,7 @@
 use crate::queue::{Queue, QueueItem};
 use crate::state::State;
 use crate::utils::ChumError;
-use crate::worker::{Backend, Operation, WorkerInfo, DIR};
+use crate::worker::{Backend, Operation, WorkerInfo, WorkerOptions, DIR};
 
 use curl::easy::Easy;
 use uuid::Uuid;
@@ -29,6 +29,7 @@ pub struct WebDav {
     queue: Arc<Mutex<Queue>>,
     buf: Vec<u8>,
     _dtx: Option<Sender<State>>,
+    wopts: WorkerOptions,
 }
 
 impl WebDav {
@@ -37,6 +38,7 @@ impl WebDav {
         distr: Vec<u64>,
         queue: Arc<Mutex<Queue>>,
         dtx: Option<Sender<State>>,
+        wopts: WorkerOptions,
     ) -> WebDav {
         let mut rng = thread_rng();
 
@@ -55,6 +57,7 @@ impl WebDav {
             distr: Arc::new(distr),
             queue: Arc::clone(&queue),
             buf: vec,
+            wopts,
             _dtx: dtx,
         }
     }
@@ -127,9 +130,11 @@ impl Backend for WebDav {
             let ttfb = client.starttransfer_time().unwrap().as_millis();
             let rtt = client.total_time().unwrap().as_millis();
 
-            self.queue.lock().unwrap().insert(QueueItem {
-                obj: fname.to_string(),
-            });
+            if self.wopts.read_queue {
+                self.queue.lock().unwrap().insert(QueueItem {
+                    obj: fname.to_string(),
+                });
+            }
             Ok(Some(WorkerInfo {
                 id: thread::current().id(),
                 op: Operation::Write,

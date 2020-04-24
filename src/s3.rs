@@ -33,7 +33,7 @@ use uuid::Uuid;
 use crate::queue::{Queue, QueueItem};
 use crate::state::State;
 use crate::utils::ChumError;
-use crate::worker::{Backend, Operation, WorkerInfo, DIR};
+use crate::worker::{Backend, Operation, WorkerInfo, WorkerOptions, DIR};
 
 pub struct S3 {
     distr: Arc<Vec<u64>>, /* object size distribution */
@@ -41,6 +41,7 @@ pub struct S3 {
     buf: Vec<u8>,
     client: S3Client,
     _dtx: Option<Sender<State>>,
+    wopts: WorkerOptions,
 }
 
 impl S3 {
@@ -49,6 +50,7 @@ impl S3 {
         distr: Vec<u64>,
         queue: Arc<Mutex<Queue>>,
         dtx: Option<Sender<State>>,
+        wopts: WorkerOptions,
     ) -> S3 {
         let mut rng = thread_rng();
 
@@ -91,6 +93,7 @@ impl S3 {
             buf: vec,
             client,
             _dtx: dtx,
+            wopts,
         };
 
         s3.setup();
@@ -165,9 +168,11 @@ impl Backend for S3 {
         match self.client.put_object(pr).sync() {
             Err(e) => Err(ChumError::new(&e.to_string())),
             Ok(_) => {
-                self.queue.lock().unwrap().insert(QueueItem {
-                    obj: full_path.to_str().unwrap().to_string(),
-                });
+                if self.wopts.read_queue {
+                    self.queue.lock().unwrap().insert(QueueItem {
+                        obj: full_path.to_str().unwrap().to_string(),
+                    });
+                }
 
                 let rtt = rtt_start.elapsed().as_millis();
                 Ok(Some(WorkerInfo {

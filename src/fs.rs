@@ -178,13 +178,13 @@ impl Backend for Fs {
         if self.wopts.sync {
             begin = Utc::now();
             match file.sync_all() {
-                Err(e) => {
-                    Err(ChumError::new(&format!("fsync failed: {}", e)))
-                },
+                Err(e) => Err(ChumError::new(&format!("fsync failed: {}", e))),
                 Ok(_) => {
-                    self.queue.lock().unwrap().insert(QueueItem {
-                        obj: fname.to_string(),
-                    });
+                    if self.wopts.read_queue {
+                        self.queue.lock().unwrap().insert(QueueItem {
+                            obj: fname.to_string(),
+                        });
+                    }
 
                     let rtt = rtt_start.elapsed().as_millis();
                     end = Utc::now();
@@ -199,8 +199,7 @@ impl Backend for Fs {
                     }))
                 }
             }
-        }
-        else {
+        } else {
             self.queue.lock().unwrap().insert(QueueItem {
                 obj: fname.to_string(),
             });

@@ -12,6 +12,8 @@ use std::error;
 use std::fmt;
 use std::str::FromStr;
 
+const DEF_QUEUE_CAP: usize = 1_000_000;
+
 /*
  * Operating modes that the queue supports. See the block comment above the
  * Queue impl for an explanation.
@@ -75,6 +77,7 @@ pub struct Queue {
     items: Vec<QueueItem>,
     cap: usize,
     mode: QueueMode,
+    cursor: usize,
 }
 
 /*
@@ -91,11 +94,12 @@ pub struct Queue {
  *   the accessor function. New items replace a random item.
  */
 impl Queue {
-    pub fn new(mode: QueueMode, cap: usize) -> Queue {
+    pub fn new(mode: QueueMode) -> Queue {
         Queue {
-            items: Vec::with_capacity(cap),
-            cap,
+            items: Vec::with_capacity(DEF_QUEUE_CAP),
+            cap: DEF_QUEUE_CAP,
             mode,
+            cursor: 0,
         }
     }
 
@@ -109,8 +113,7 @@ impl Queue {
             return;
         }
 
-        self.remove();
-        self.items.push(qi);
+        self.replace(qi);
     }
 
     /*
@@ -139,10 +142,95 @@ impl Queue {
         match self.mode {
             QueueMode::Lru => Some(self.items.remove(0)),
             QueueMode::Mru => Some(self.items.remove(0)),
-            QueueMode::Rand => Some(
-                self.items
-                    .remove(rand::thread_rng().gen_range(0, self.items.len())),
-            ),
+            QueueMode::Rand => {
+                let ret = Some(self.items.swap_remove(self.cursor));
+                if !self.items.is_empty() {
+                    self.cursor = (self.cursor + 1) % self.items.len();
+                } else {
+                    self.cursor = 0;
+                }
+                ret
+            }
         }
+    }
+
+    pub fn replace(&mut self, qi: QueueItem) {
+        if self.items.is_empty() {
+            return;
+        }
+
+        let len = self.items.len();
+
+        match self.mode {
+            QueueMode::Lru => self.items[len] = qi,
+            QueueMode::Mru => self.items[len] = qi,
+            QueueMode::Rand => {
+                self.items[self.cursor] = qi;
+                self.cursor = (self.cursor + 1) % len;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    /*
+     * Historically we've had problems with the naiive queue implementation.
+     * Specifically the naiive implementation isn't efficient when new items
+     * are added or removed from a full queue.
+     *
+     * This test is like a benchmark, except it doesn't fit the rust
+     * benchmarking model because the routine here can be fairly expensive
+     * depending on the length of the queue.
+     *
+     * If you're interested in seeing the results that are printed here
+     * (timings for filling a queue and then overwriting all items within), I
+     * recommend running `cargo test -- --nocapture` to see the timings.
+     */
+
+    #[test]
+    fn test_queue_overwrite() {
+        let mut q = Queue::new(QueueMode::Rand);
+        let start = Instant::now();
+        for _ in 0..DEF_QUEUE_CAP {
+            q.insert(QueueItem {
+                obj: "testobj".to_string(),
+            });
+        }
+        let end = start.elapsed().as_millis();
+        println!("adding {} items took {}ms", DEF_QUEUE_CAP, end);
+
+        let noverflow = DEF_QUEUE_CAP;
+        let start = Instant::now();
+        for _ in 0..noverflow {
+            q.insert(QueueItem {
+                obj: "testobj".to_string(),
+            });
+        }
+        let end = start.elapsed().as_millis();
+        println!("adding {} overflow items took {}ms", noverflow, end);
+    }
+
+    #[test]
+    fn test_queue_clear() {
+        let mut q = Queue::new(QueueMode::Rand);
+        let start = Instant::now();
+        for _ in 0..DEF_QUEUE_CAP {
+            q.insert(QueueItem {
+                obj: "testobj".to_string(),
+            });
+        }
+        let end = start.elapsed().as_millis();
+        println!("adding {} items took {}ms", DEF_QUEUE_CAP, end);
+
+        let start = Instant::now();
+        for _ in 0..DEF_QUEUE_CAP {
+            q.remove();
+        }
+        let end = start.elapsed().as_millis();
+        println!("removing {} items took {}ms", DEF_QUEUE_CAP, end);
     }
 }

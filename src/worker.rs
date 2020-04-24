@@ -26,6 +26,7 @@ pub const DIR: &str = "chum";
 #[derive(Clone)]
 pub struct WorkerOptions {
     pub sync: bool,
+    pub read_queue: bool,
 }
 
 #[derive(Debug)]
@@ -166,11 +167,19 @@ impl Worker {
          * we use it.
          */
         let backend: Box<dyn Backend> = match protocol.as_ref() {
-            "webdav" => {
-                Box::new(WebDav::new(target, distr, Arc::clone(&queue), dtx))
+            "webdav" => Box::new(WebDav::new(
+                target,
+                distr,
+                Arc::clone(&queue),
+                dtx,
+                wopts,
+            )),
+            "s3" => {
+                Box::new(S3::new(target, distr, Arc::clone(&queue), dtx, wopts))
             }
-            "s3" => Box::new(S3::new(target, distr, Arc::clone(&queue), dtx)),
-            "fs" => Box::new(Fs::new(target, distr, Arc::clone(&queue), dtx, wopts)),
+            "fs" => {
+                Box::new(Fs::new(target, distr, Arc::clone(&queue), dtx, wopts))
+            }
             _ => panic!("unknown client protocol"),
         };
 
