@@ -170,7 +170,7 @@ impl Backend for S3 {
             Ok(_) => {
                 if self.wopts.read_queue {
                     self.queue.lock().unwrap().insert(QueueItem {
-                        obj: full_path.to_str().unwrap().to_string(),
+                        obj: fname.to_string(),
                     });
                 }
 
@@ -191,7 +191,7 @@ impl Backend for S3 {
          * Create a scope here to ensure that we don't keep the queue locked
          * for longer than necessary.
          */
-        let fname: String;
+        let full_path: String;
         {
             let mut q = self.queue.lock().unwrap();
             let qi = q.get();
@@ -200,19 +200,23 @@ impl Backend for S3 {
             }
             let qi = qi.unwrap();
 
-            fname = qi.obj.clone();
+            let fname = qi.obj.clone();
+            full_path = self.get_path(fname.to_string())
+                .to_str()
+                .unwrap()
+                .to_string();
         }
 
         let gr = GetObjectRequest {
             bucket: DIR.to_string(),
-            key: fname.clone(),
+            key: full_path.clone(),
             ..Default::default()
         };
 
         let rtt_start = Instant::now();
         let res = match self.client.get_object(gr).sync() {
             Err(e) => {
-                Err(ChumError::new(&format!("failed to read {}: {}", fname, e)))
+                Err(ChumError::new(&format!("failed to read {}: {}", full_path, e)))
             }
             Ok(res) => Ok(res),
         }?;
@@ -243,6 +247,7 @@ impl Backend for S3 {
     }
 
     fn delete(&self) -> Result<Option<WorkerInfo>, ChumError> {
+        let full_path: String;
         let fname: String;
         {
             let mut q = self.queue.lock().unwrap();
@@ -253,11 +258,15 @@ impl Backend for S3 {
             let qi = qi.unwrap();
 
             fname = qi.obj;
+            full_path = self.get_path(fname.to_string())
+                .to_str()
+                .unwrap()
+                .to_string();
         }
 
         let dr = DeleteObjectRequest {
             bucket: DIR.to_string(),
-            key: fname.clone(),
+            key: full_path.clone(),
             ..Default::default()
         };
 
@@ -276,9 +285,7 @@ impl Backend for S3 {
                 .insert(QueueItem { obj: fname.clone() });
 
             return Err(ChumError::new(&format!(
-                "Deleting {} \
-                failed: {}",
-                fname, e
+                "Deleting {} failed: {}", full_path, e
             )));
         }
 
