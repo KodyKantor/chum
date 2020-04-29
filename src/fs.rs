@@ -83,10 +83,10 @@ impl Fs {
 
     /* Common function to handle creating filesystem path. */
     fn get_path(&self, fname: String) -> PathBuf {
-        let first_two = &fname[0..2];
+        let first_digits = &fname[0..4];
         Path::new(&format!(
             "{}/{}/v2/{}/{}/{}",
-            self.basedir, DIR, DIR, first_two, fname
+            self.basedir, DIR, DIR, first_digits, fname
         ))
         .to_path_buf()
     }
