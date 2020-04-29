@@ -30,14 +30,14 @@ use rusoto_s3::{
 
 use uuid::Uuid;
 
-use crate::queue::{Queue, QueueItem};
+use crate::queue::Queue;
 use crate::state::State;
 use crate::utils::ChumError;
 use crate::worker::{Backend, Operation, WorkerInfo, WorkerOptions, DIR};
 
 pub struct S3 {
     distr: Arc<Vec<u64>>, /* object size distribution */
-    queue: Arc<Mutex<Queue>>,
+    queue: Arc<Mutex<Queue<String>>>,
     buf: Vec<u8>,
     client: S3Client,
     _dtx: Option<Sender<State>>,
@@ -48,7 +48,7 @@ impl S3 {
     pub fn new(
         target: String,
         distr: Vec<u64>,
-        queue: Arc<Mutex<Queue>>,
+        queue: Arc<Mutex<Queue<String>>>,
         dtx: Option<Sender<State>>,
         wopts: WorkerOptions,
     ) -> S3 {
@@ -169,9 +169,7 @@ impl Backend for S3 {
             Err(e) => Err(ChumError::new(&e.to_string())),
             Ok(_) => {
                 if self.wopts.read_queue {
-                    self.queue.lock().unwrap().insert(QueueItem {
-                        obj: fname.to_string(),
-                    });
+                    self.queue.lock().unwrap().insert(fname.to_string());
                 }
 
                 let rtt = rtt_start.elapsed().as_millis();
@@ -200,8 +198,8 @@ impl Backend for S3 {
             }
             let qi = qi.unwrap();
 
-            let fname = qi.obj.clone();
-            full_path = self.get_path(fname.to_string())
+            let fname = qi.clone();
+            full_path = self.get_path(fname)
                 .to_str()
                 .unwrap()
                 .to_string();
@@ -255,9 +253,8 @@ impl Backend for S3 {
             if qi.is_none() {
                 return Ok(None);
             }
-            let qi = qi.unwrap();
+            fname = qi.unwrap();
 
-            fname = qi.obj;
             full_path = self.get_path(fname.to_string())
                 .to_str()
                 .unwrap()
@@ -282,7 +279,7 @@ impl Backend for S3 {
             self.queue
                 .lock()
                 .unwrap()
-                .insert(QueueItem { obj: fname.clone() });
+                .insert(fname);
 
             return Err(ChumError::new(&format!(
                 "Deleting {} failed: {}", full_path, e

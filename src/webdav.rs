@@ -6,7 +6,7 @@
  * Copyright 2020 Joyent, Inc.
  */
 
-use crate::queue::{Queue, QueueItem};
+use crate::queue::Queue;
 use crate::state::State;
 use crate::utils::ChumError;
 use crate::worker::{Backend, Operation, WorkerInfo, WorkerOptions, DIR};
@@ -26,7 +26,7 @@ use std::vec::Vec;
 pub struct WebDav {
     target: String,       /* target ip address */
     distr: Arc<Vec<u64>>, /* object size distribution */
-    queue: Arc<Mutex<Queue>>,
+    queue: Arc<Mutex<Queue<String>>>,
     buf: Vec<u8>,
     _dtx: Option<Sender<State>>,
     wopts: WorkerOptions,
@@ -36,7 +36,7 @@ impl WebDav {
     pub fn new(
         target: String,
         distr: Vec<u64>,
-        queue: Arc<Mutex<Queue>>,
+        queue: Arc<Mutex<Queue<String>>>,
         dtx: Option<Sender<State>>,
         wopts: WorkerOptions,
     ) -> WebDav {
@@ -131,9 +131,7 @@ impl Backend for WebDav {
             let rtt = client.total_time().unwrap().as_millis();
 
             if self.wopts.read_queue {
-                self.queue.lock().unwrap().insert(QueueItem {
-                    obj: fname.to_string(),
-                });
+                self.queue.lock().unwrap().insert(fname.to_string());
             }
             Ok(Some(WorkerInfo {
                 id: thread::current().id(),
@@ -166,7 +164,7 @@ impl Backend for WebDav {
             }
             let qi = qi.unwrap();
 
-            fname = qi.obj.clone();
+            fname = qi.clone();
             client.url(&self.get_path(fname.clone()))?;
         }
         client.get(true)?;

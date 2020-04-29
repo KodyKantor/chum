@@ -18,7 +18,7 @@ use std::vec::Vec;
 use std::{thread, thread::ThreadId};
 use std::{time, time::SystemTime, time::UNIX_EPOCH};
 
-use crate::queue::{Queue, QueueItem};
+use crate::queue::Queue;
 use crate::worker::{Operation, WorkerInfo, WorkerStat};
 
 #[derive(PartialEq)]
@@ -195,9 +195,18 @@ fn print_tabular(
     _: &OutputFormat,
     _: HashMap<Operation, HashMap<ThreadId, WorkerStat>>,
     op_ticks: HashMap<Operation, WorkerStat>,
-    _: &mut HashMap<Operation, WorkerStat>,
+    op_agg: &mut HashMap<Operation, WorkerStat>,
 ) {
     let zero_stat = WorkerStat::new();
+
+    let time = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(time) => format!("{}", time.as_secs()),
+        Err(_) => String::from("0"),
+    };
+
+    /*
+     * Per-tick (-i interval flag) stats.
+     */
     let reader_stats = match op_ticks.get(&Operation::Read) {
         Some(stats) => stats,
         None => &zero_stat,
@@ -213,13 +222,21 @@ fn print_tabular(
         None => &zero_stat,
     };
 
-    let time = match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(time) => format!("{}", time.as_secs()),
-        Err(_) => String::from("0"),
+    /*
+     * Total bytes read and written since start.
+     */
+    let agg_read = match op_agg.get(&Operation::Read) {
+        Some(stats) => stats,
+        None => &zero_stat,
+    };
+
+    let agg_write = match op_agg.get(&Operation::Write) {
+        Some(stats) => stats,
+        None => &zero_stat,
     };
 
     println!(
-        "{} {} {} {} {} {} {} {} {} {}",
+        "{} {} {} {} {} {} {} {} {} {} {} {}",
         time,
         reader_stats.objs,
         writer_stats.objs,
@@ -229,7 +246,9 @@ fn print_tabular(
         writer_stats.ttfb,
         reader_stats.rtt,
         writer_stats.rtt,
-        error_stats.objs
+        error_stats.objs,
+        agg_read.data,
+        agg_write.data,
     );
 }
 
@@ -291,8 +310,7 @@ pub fn parse_human(val: &str) -> Result<u64, ChumError> {
         }
     } else {
         Err(ChumError::new(
-            "provided value must be a positive number with a \
-            unit suffix",
+            "provided value must be a positive number with a unit suffix"
         ))
     }
 }
@@ -373,7 +391,7 @@ pub fn convert_numeric_distribution(
  * we wrap them in a more helpful ChumError.
  */
 pub fn populate_queue(
-    queue: Arc<Mutex<Queue>>,
+    queue: Arc<Mutex<Queue<String>>>,
     readlist: String,
 ) -> Result<(), ChumError> {
     let file = File::open(readlist).map_err(|e| {
@@ -395,7 +413,7 @@ pub fn populate_queue(
             }
         };
 
-        q.insert(QueueItem { obj: pathstr });
+        q.insert(pathstr);
     }
 
     Ok(())

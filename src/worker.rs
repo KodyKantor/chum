@@ -150,7 +150,7 @@ impl Worker {
         target: String,
         distr: Vec<u64>,
         pause: u64,
-        queue: Arc<Mutex<Queue>>,
+        queue: Arc<Mutex<Queue<String>>>,
         ops: Vec<String>,
         dtx: Option<Sender<State>>,
         wopts: WorkerOptions,

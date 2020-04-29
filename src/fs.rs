@@ -8,7 +8,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::queue::{Queue, QueueItem};
+use crate::queue::Queue;
 use crate::state::State;
 use crate::utils::ChumError;
 use crate::worker::*;
@@ -33,7 +33,7 @@ use uuid::Uuid;
 pub struct Fs {
     basedir: String,
     distr: Arc<Vec<u64>>, /* object size distribution */
-    queue: Arc<Mutex<Queue>>,
+    queue: Arc<Mutex<Queue<String>>>,
     buf: Vec<u8>,
     dtx: Option<Sender<State>>,
     wopts: WorkerOptions,
@@ -43,7 +43,7 @@ impl Fs {
     pub fn new(
         basedir: String,
         distr: Vec<u64>,
-        queue: Arc<Mutex<Queue>>,
+        queue: Arc<Mutex<Queue<String>>>,
         dtx: Option<Sender<State>>,
         wopts: WorkerOptions,
     ) -> Fs {
@@ -181,9 +181,7 @@ impl Backend for Fs {
                 Err(e) => Err(ChumError::new(&format!("fsync failed: {}", e))),
                 Ok(_) => {
                     if self.wopts.read_queue {
-                        self.queue.lock().unwrap().insert(QueueItem {
-                            obj: fname.to_string(),
-                        });
+                        self.queue.lock().unwrap().insert(fname.to_string());
                     }
 
                     let rtt = rtt_start.elapsed().as_millis();
@@ -200,9 +198,7 @@ impl Backend for Fs {
                 }
             }
         } else {
-            self.queue.lock().unwrap().insert(QueueItem {
-                obj: fname.to_string(),
-            });
+            self.queue.lock().unwrap().insert(fname.to_string());
 
             let rtt = rtt_start.elapsed().as_millis();
             Ok(Some(WorkerInfo {
@@ -225,7 +221,7 @@ impl Backend for Fs {
             }
             let qi = qi.unwrap();
 
-            fname = qi.obj.clone();
+            fname = qi.clone();
         }
 
         let mut begin: DateTime<Utc>;
@@ -265,9 +261,7 @@ impl Backend for Fs {
             if qi.is_none() {
                 return Ok(None);
             }
-            let qi = qi.unwrap();
-
-            fname = qi.obj;
+            fname = qi.unwrap();
         }
         let begin: DateTime<Utc>;
         let end: DateTime<Utc>;
@@ -285,7 +279,7 @@ impl Backend for Fs {
             self.queue
                 .lock()
                 .unwrap()
-                .insert(QueueItem { obj: fname.clone() });
+                .insert(fname.clone());
 
             return Err(ChumError::new(&format!(
                 "Deleting {} \

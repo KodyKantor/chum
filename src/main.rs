@@ -214,7 +214,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         workeropts.read_queue = true;
     }
 
-    let q = Arc::new(Mutex::new(Queue::new(qmode)));
+    let q: Arc<Mutex<Queue<String>>> = Arc::new(Mutex::new(Queue::new(qmode)));
 
     if matches.opt_present("read-list") {
         let readlist = matches.opt_str("read-list").unwrap();

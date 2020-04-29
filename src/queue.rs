@@ -69,12 +69,8 @@ impl fmt::Display for QueueMode {
     }
 }
 
-pub struct QueueItem {
-    pub obj: String,
-}
-
-pub struct Queue {
-    items: Vec<QueueItem>,
+pub struct Queue<T> {
+    items: Vec<T>,
     cap: usize,
     mode: QueueMode,
     cursor: usize,
@@ -93,8 +89,8 @@ pub struct Queue {
  * - Rand (random). Operates like an array. Random items are returned when using
  *   the accessor function. New items replace a random item.
  */
-impl Queue {
-    pub fn new(mode: QueueMode) -> Queue {
+impl<T> Queue<T> {
+    pub fn new(mode: QueueMode) -> Queue<T> {
         Queue {
             items: Vec::with_capacity(DEF_QUEUE_CAP),
             cap: DEF_QUEUE_CAP,
@@ -107,7 +103,7 @@ impl Queue {
      * Inserts an item into the queue.
      * Removes an item if the queue has hit its capacity.
      */
-    pub fn insert(&mut self, qi: QueueItem) {
+    pub fn insert(&mut self, qi: T) {
         if self.items.len() < self.cap {
             self.items.push(qi);
             return;
@@ -120,7 +116,7 @@ impl Queue {
      * Return an item from the queue.
      * Returns None if nothing is in the queue.
      */
-    pub fn get(&mut self) -> Option<&QueueItem> {
+    pub fn get(&mut self) -> Option<&T> {
         if self.items.is_empty() {
             return None;
         }
@@ -134,7 +130,7 @@ impl Queue {
         }
     }
 
-    pub fn remove(&mut self) -> Option<QueueItem> {
+    pub fn remove(&mut self) -> Option<T> {
         if self.items.is_empty() {
             return None;
         }
@@ -154,7 +150,7 @@ impl Queue {
         }
     }
 
-    pub fn replace(&mut self, qi: QueueItem) {
+    pub fn replace(&mut self, qi: T) {
         if self.items.is_empty() {
             return;
         }
@@ -196,9 +192,7 @@ mod tests {
         let mut q = Queue::new(QueueMode::Rand);
         let start = Instant::now();
         for _ in 0..DEF_QUEUE_CAP {
-            q.insert(QueueItem {
-                obj: "testobj".to_string(),
-            });
+            q.insert("testobj".to_string());
         }
         let end = start.elapsed().as_millis();
         println!("adding {} items took {}ms", DEF_QUEUE_CAP, end);
@@ -206,9 +200,7 @@ mod tests {
         let noverflow = DEF_QUEUE_CAP;
         let start = Instant::now();
         for _ in 0..noverflow {
-            q.insert(QueueItem {
-                obj: "testobj".to_string(),
-            });
+            q.insert("testobj".to_string());
         }
         let end = start.elapsed().as_millis();
         println!("adding {} overflow items took {}ms", noverflow, end);
@@ -219,9 +211,7 @@ mod tests {
         let mut q = Queue::new(QueueMode::Rand);
         let start = Instant::now();
         for _ in 0..DEF_QUEUE_CAP {
-            q.insert(QueueItem {
-                obj: "testobj".to_string(),
-            });
+            q.insert("testobj".to_string());
         }
         let end = start.elapsed().as_millis();
         println!("adding {} items took {}ms", DEF_QUEUE_CAP, end);
