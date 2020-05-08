@@ -199,10 +199,7 @@ impl Backend for S3 {
             let qi = qi.unwrap();
 
             let fname = qi.clone();
-            full_path = self.get_path(fname)
-                .to_str()
-                .unwrap()
-                .to_string();
+            full_path = self.get_path(fname).to_str().unwrap().to_string();
         }
 
         let gr = GetObjectRequest {
@@ -213,9 +210,10 @@ impl Backend for S3 {
 
         let rtt_start = Instant::now();
         let res = match self.client.get_object(gr).sync() {
-            Err(e) => {
-                Err(ChumError::new(&format!("failed to read {}: {}", full_path, e)))
-            }
+            Err(e) => Err(ChumError::new(&format!(
+                "failed to read {}: {}",
+                full_path, e
+            ))),
             Ok(res) => Ok(res),
         }?;
 
@@ -228,7 +226,7 @@ impl Backend for S3 {
             let mut body = Vec::new();
             stream.read_to_end(&mut body).expect(
                 "failed to read response \
-                body",
+                 body",
             );
         }
 
@@ -255,7 +253,8 @@ impl Backend for S3 {
             }
             fname = qi.unwrap();
 
-            full_path = self.get_path(fname.to_string())
+            full_path = self
+                .get_path(fname.to_string())
                 .to_str()
                 .unwrap()
                 .to_string();
@@ -276,13 +275,11 @@ impl Backend for S3 {
          * operations if there was an error during the delete.
          */
         if let Err(e) = res {
-            self.queue
-                .lock()
-                .unwrap()
-                .insert(fname);
+            self.queue.lock().unwrap().insert(fname);
 
             return Err(ChumError::new(&format!(
-                "Deleting {} failed: {}", full_path, e
+                "Deleting {} failed: {}",
+                full_path, e
             )));
         }
 

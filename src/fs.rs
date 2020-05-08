@@ -77,7 +77,7 @@ impl Fs {
         let directory = &format!("{}/{}/v2/{}", self.basedir, DIR, DIR);
         std::fs::create_dir_all(directory).expect(
             "failed to create \
-            initial directory layout",
+             initial directory layout",
         );
     }
 
@@ -276,14 +276,11 @@ impl Backend for Fs {
         self.send_state("delete::rm", begin, end);
 
         if let Err(e) = res {
-            self.queue
-                .lock()
-                .unwrap()
-                .insert(fname.clone());
+            self.queue.lock().unwrap().insert(fname.clone());
 
             return Err(ChumError::new(&format!(
                 "Deleting {} \
-                failed: {}",
+                 failed: {}",
                 fname, e
             )));
         }

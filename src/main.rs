@@ -36,11 +36,10 @@ const DEF_INTERVAL: u64 = 2;
 const DEF_QUEUE_MODE: QueueMode = QueueMode::Rand;
 const DEF_WORKLOAD: &str = "r,w";
 const DEF_OUTPUT_FORMAT: &str = "h";
-const DEF_DATA_CAP: &str = "0";
 
 fn usage(opts: Options, msg: &str) {
     let synopsis = "\
-        Write files to a given target as quickly as possible";
+                    Write files to a given target as quickly as possible";
 
     let usg = format!("chum - {}", synopsis);
     println!("{}", opts.usage(&usg));
@@ -58,7 +57,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "concurrency",
         &format!(
             "number of concurrent threads, \
-                    default: {}",
+             default: {}",
             DEF_CONCURRENCY
         ),
         "NUM",
@@ -68,7 +67,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "sleep",
         &format!(
             "sleep duration in millis between each \
-                    upload, default: {}",
+             upload, default: {}",
             DEF_SLEEP
         ),
         "NUM",
@@ -78,7 +77,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "distribution",
         &format!(
             "comma-separated distribution of \
-                    file sizes to upload, default: {}",
+             file sizes to upload, default: {}",
             DEF_DISTR
         ),
         "NUM:COUNT,NUM:COUNT,...",
@@ -88,7 +87,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "interval",
         &format!(
             "interval in seconds at which to \
-                    report stats, default: {}",
+             report stats, default: {}",
             DEF_INTERVAL
         ),
         "NUM",
@@ -117,19 +116,22 @@ fn main() -> Result<(), Box<dyn Error>> {
     opts.optopt(
         "m",
         "max-data",
-        &format!(
-            "maximum amount of data to write to the target, \
-                    default: {}, '0' disables cap",
-            DEF_DATA_CAP
-        ),
+        "maximum amount of data to write to the target, \
+         default: none, '0' disables cap",
         "CAP",
     );
     opts.optopt(
         "r",
         "read-list",
         "path to a file listing files to read from server, \
-                    default: none (files are chosen from recent uploads)",
+         default: none (files are chosen from recent uploads)",
         "FILE",
+    );
+    opts.optopt(
+        "p",
+        "percentage",
+        "fill the given filesystem path to a given percentage capacity",
+        "NUM",
     );
 
     opts.optflag("h", "help", "print this help message");
@@ -137,7 +139,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "D",
         "debug",
         "enable verbose statemap tracing (may impact performance)\n\
-                 Must be used with the -m flag",
+         Must be used with the -m flag",
     );
     opts.optflag("", "no-sync", "disable synchronous writes");
 
@@ -260,9 +262,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let data_cap = parse_human(
-        &matches.opt_get_default("max-data", String::from(DEF_DATA_CAP))?,
-    )?;
+    let mut cap: Option<DataCap> = None;
+    let p = matches.opt_get("percentage")?;
+    let m: Option<String> = matches.opt_get("max-data")?;
+
+    /*
+     * If the user provides both -p and -m, prefer -m since it is more specific.
+     */
+    if let Some(perc) = p {
+        cap = Some(DataCap::Percentage(perc));
+    } else if let Some(logical) = m {
+        let capnum = parse_human(&logical)?;
+        cap = Some(DataCap::LogicalData(capnum));
+    }
 
     /*
      * Start the real work. Kick off worker threads and a stat listener.
@@ -288,7 +300,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     /* Kick off statistics collection and reporting. */
     let stat_thread = thread::spawn(move || {
-        collect_stats(rx, interval, format, data_cap);
+        collect_stats(rx, interval, format, cap, target.clone());
     });
 
     /*

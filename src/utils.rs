@@ -5,7 +5,8 @@
  *
  * Copyright 2020 Joyent, Inc.
  */
-extern crate regex;
+
+extern crate fs3;
 
 use regex::Regex;
 
@@ -26,6 +27,11 @@ pub enum OutputFormat {
     Human, /* prose, for humans watching the console. */
     HumanVerbose,
     Tabular, /* tab-separated, for throwing into something like gnuplot. */
+}
+
+pub enum DataCap {
+    LogicalData(u64),
+    Percentage(u32),
 }
 
 /*
@@ -52,11 +58,23 @@ pub fn collect_stats(
     rx: Receiver<Result<WorkerInfo, ChumError>>,
     interval: u64,
     format: OutputFormat,
-    data_cap: u64,
+    data_cap: Option<DataCap>,
+    target: String,
 ) {
     let mut total_bytes_written: u64 = 0;
     let mut op_agg = HashMap::new();
     let start_time = SystemTime::now();
+
+    /*
+     * This is copied code, and generally an abstraction leak. We should really
+     * implement a synchronous way of doing accounting that is guaranteed not
+     * to impact performance. Ideally this would tie in to the backend
+     * implementation somehow. The filesystem and webdav modes may do accounting
+     * in different ways, so we should allow them to have their own logic.
+     */
+    let tok: Vec<&str> = target.split(':').collect();
+    let protocol = tok[0].to_ascii_lowercase(); /* e.g. 's3' or 'webdav'. */
+    let target = tok[1].to_string();
 
     loop {
         thread::sleep(time::Duration::from_secs(interval));
@@ -122,8 +140,36 @@ pub fn collect_stats(
             ),
         }
 
-        if data_cap > 0 && total_bytes_written >= data_cap {
-            return; /* Exit the thread, signalling and end of the program. */
+        match data_cap {
+            Some(DataCap::LogicalData(cap)) => {
+                if total_bytes_written >= cap {
+                    /* Exit the thread, signalling and end of the program. */
+                    return;
+                }
+            }
+            Some(DataCap::Percentage(cap)) => {
+                /* Percentage based accounting only supported by fs backend. */
+                if protocol != "fs" {
+                    continue;
+                }
+
+                match fs3::statvfs(&target) {
+                    Ok(stats) => {
+                        let used =
+                            stats.total_space() - stats.available_space();
+                        let perc_used = (used * 100) / stats.total_space();
+
+                        if perc_used >= cap.into() {
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        println!("statvfs error for {}: {}", &target, e);
+                        return;
+                    }
+                }
+            }
+            None => (),
         }
     }
 }
@@ -310,7 +356,7 @@ pub fn parse_human(val: &str) -> Result<u64, ChumError> {
         }
     } else {
         Err(ChumError::new(
-            "provided value must be a positive number with a unit suffix"
+            "provided value must be a positive number with a unit suffix",
         ))
     }
 }
@@ -352,7 +398,7 @@ pub fn expand_distribution(dstr: &str) -> Result<Vec<String>, ChumError> {
             _ => {
                 return Err(ChumError::new(&format!(
                     "too many multiples in \
-                token '{}'",
+                     token '{}'",
                     tok.join(":")
                 )))
             }
@@ -434,21 +480,21 @@ mod tests {
             parse_human("1Y"),
             Err(ChumError::new(
                 "provided value \
-            must be a positive number with a unit suffix"
+                 must be a positive number with a unit suffix"
             ))
         );
         assert_eq!(
             parse_human("1024b"),
             Err(ChumError::new(
                 "provided value \
-            must be a positive number with a unit suffix"
+                 must be a positive number with a unit suffix"
             ))
         );
         assert_eq!(
             parse_human("1234"),
             Err(ChumError::new(
                 "provided value \
-            must be a positive number with a unit suffix"
+                 must be a positive number with a unit suffix"
             ))
         );
 
@@ -456,14 +502,14 @@ mod tests {
             parse_human("-1G"),
             Err(ChumError::new(
                 "provided value \
-            must be a positive number with a unit suffix"
+                 must be a positive number with a unit suffix"
             ))
         );
         assert_eq!(
             parse_human("T1"),
             Err(ChumError::new(
                 "provided value \
-            must be a positive number with a unit suffix"
+                 must be a positive number with a unit suffix"
             ))
         );
         Ok(())
@@ -508,7 +554,7 @@ mod tests {
             convert_numeric_distribution(expand_distribution("1,2,3")?),
             Err(ChumError::new(
                 "provided value must be a positive number \
-                with a unit suffix"
+                 with a unit suffix"
             ))
         );
 
@@ -516,7 +562,7 @@ mod tests {
             convert_numeric_distribution(expand_distribution("a,b,c")?),
             Err(ChumError::new(
                 "provided value must be a positive number \
-                with a unit suffix"
+                 with a unit suffix"
             ))
         );
 
