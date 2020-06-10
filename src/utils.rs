@@ -22,11 +22,32 @@ use std::{time, time::SystemTime, time::UNIX_EPOCH};
 use crate::queue::Queue;
 use crate::worker::{Operation, WorkerInfo, WorkerStat};
 
+/*
+ * In the future we should use multiple '-v' flags for this:
+ *  none: tabular
+ *  -v: human
+ *  -vv: human verbose
+ *
+ * But today the user specifies the exact format they want.
+ */
 #[derive(PartialEq)]
 pub enum OutputFormat {
     Human, /* prose, for humans watching the console. */
     HumanVerbose,
     Tabular, /* tab-separated, for throwing into something like gnuplot. */
+}
+
+impl std::str::FromStr for OutputFormat {
+    type Err = ChumError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "h" => Ok(OutputFormat::Human),
+            "v" => Ok(OutputFormat::HumanVerbose),
+            "t" => Ok(OutputFormat::Tabular),
+            _ => Err(ChumError::new("invalid operation requested")),
+        }
+    }
 }
 
 pub enum DataCap {
@@ -60,6 +81,7 @@ pub fn collect_stats(
     format: OutputFormat,
     data_cap: Option<DataCap>,
     target: String,
+    protocol: String,
 ) {
     let mut total_bytes_written: u64 = 0;
     let mut op_agg = HashMap::new();
@@ -72,9 +94,6 @@ pub fn collect_stats(
      * implementation somehow. The filesystem and webdav modes may do accounting
      * in different ways, so we should allow them to have their own logic.
      */
-    let tok: Vec<&str> = target.split(':').collect();
-    let protocol = tok[0].to_ascii_lowercase(); /* e.g. 's3' or 'webdav'. */
-    let target = tok[1].to_string();
 
     loop {
         thread::sleep(time::Duration::from_secs(interval));
@@ -419,6 +438,18 @@ pub fn convert_numeric_distribution(
 
     for s in dstr {
         gen_distr.push(parse_human(&s)?);
+    }
+
+    Ok(gen_distr)
+}
+
+pub fn convert_operation_distribution(
+    dstr: Vec<String>,
+) -> Result<Vec<Operation>, ChumError> {
+    let mut gen_distr = Vec::new();
+
+    for s in dstr {
+        gen_distr.push(s.parse()?);
     }
 
     Ok(gen_distr)

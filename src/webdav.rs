@@ -6,8 +6,6 @@
  * Copyright 2020 Joyent, Inc.
  */
 
-use crate::queue::Queue;
-use crate::state::State;
 use crate::utils::ChumError;
 use crate::worker::{Backend, Operation, WorkerInfo, WorkerOptions, DIR};
 
@@ -19,27 +17,16 @@ use rand::thread_rng;
 use rand::AsByteSliceMut;
 use rand::Rng;
 
-use std::sync::{mpsc::Sender, Arc, Mutex};
 use std::thread;
 use std::vec::Vec;
 
 pub struct WebDav {
-    target: String,       /* target ip address */
-    distr: Arc<Vec<u64>>, /* object size distribution */
-    queue: Arc<Mutex<Queue<String>>>,
     buf: Vec<u8>,
-    _dtx: Option<Sender<State>>,
     wopts: WorkerOptions,
 }
 
 impl WebDav {
-    pub fn new(
-        target: String,
-        distr: Vec<u64>,
-        queue: Arc<Mutex<Queue<String>>>,
-        dtx: Option<Sender<State>>,
-        wopts: WorkerOptions,
-    ) -> WebDav {
+    pub fn new(wopts: WorkerOptions) -> WebDav {
         let mut rng = thread_rng();
 
         /*
@@ -52,21 +39,14 @@ impl WebDav {
         let mut vec: Vec<u8> = Vec::new();
         vec.extend_from_slice(arr);
 
-        WebDav {
-            target,
-            distr: Arc::new(distr),
-            queue: Arc::clone(&queue),
-            buf: vec,
-            wopts,
-            _dtx: dtx,
-        }
+        WebDav { buf: vec, wopts }
     }
 
     pub fn get_path(&self, fname: String) -> String {
         let first_two = &fname[0..2];
         format!(
-            "http://{}:80/{}/v2/{}/{}/{}",
-            self.target, DIR, DIR, first_two, fname
+            "http://{}/{}/v2/{}/{}/{}",
+            self.wopts.target, DIR, DIR, first_two, fname
         )
     }
 }
@@ -88,7 +68,8 @@ impl Backend for WebDav {
 
         /* Randomly choose a file size from the list. */
         let size = *self
-            .distr
+            .wopts
+            .distribution
             .choose(&mut rng)
             .expect("choosing file size failed");
 
@@ -131,7 +112,7 @@ impl Backend for WebDav {
             let rtt = client.total_time().unwrap().as_millis();
 
             if self.wopts.read_queue {
-                self.queue.lock().unwrap().insert(fname.to_string());
+                self.wopts.queue.lock().unwrap().insert(fname.to_string());
             }
             Ok(Some(WorkerInfo {
                 id: thread::current().id(),
@@ -157,7 +138,7 @@ impl Backend for WebDav {
          * for longer than necessary.
          */
         {
-            let mut q = self.queue.lock().unwrap();
+            let mut q = self.wopts.queue.lock().unwrap();
             let qi = q.get();
             if qi.is_none() {
                 return Ok(None);

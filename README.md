@@ -1,6 +1,6 @@
 # chum - storage load generator
 
-`chum` is a load generator for WebDAV or S3 servers.
+`chum` is a load generator for WebDAV and S3 servers, or the local filesystem.
 
 ## How it works
 
@@ -100,52 +100,20 @@ Make sure your user can write to the directory you tell chum to use.
 
 ## Help
 
-```
-$ chum -h
-chum - Upload files to a given file server as quickly as possible
-
-Options:
-    -t, --target [s3|webdav|fs]:IP|PATH
-                        target server
-    -c, --concurrency NUM
-                        number of concurrent threads, default: 1
-    -s, --sleep NUM     sleep duration in millis between each upload, default:
-                        0
-    -d, --distribution NUM:COUNT,NUM:COUNT,...
-                        comma-separated distribution of file sizes to upload,
-                        default: 128k,256k,512k
-    -i, --interval NUM  interval in seconds at which to report stats, default:
-                        2
-    -q, --queue-mode lru|mru|rand
-                        queue mode for read operations, default: rand
-    -w, --workload OP:COUNT,OP:COUNT
-                        workload of operations, default: r,w
-    -f, --format h|v|t  statistics output format, default: h
-    -m, --max-data CAP  maximum amount of data to write to the target,
-                        default: 0, '0' disables cap
-    -r, --read-list FILE
-                        path to a file listing files to read from server,
-                        default: none (files are chosen from recent uploads)
-    -h, --help          print this help message
-    -D, --debug         enable verbose statemap tracing (may impact
-                        performance)
-                        Must be used with the -m flag
-```
-
 A target is required at a minimum:
 ```
-$ chum -t webdav:127.0.0.1
+$ chum worker webdav -t 127.0.0.1:80
 ```
 
-Target a local nginx server, 50 worker threads, an object size distribution of
-[1m, 2m, 3m], each thread sleeping 1000ms between each read/write:
+Target a local nginx server on port 80, 50 worker threads, an object size
+distribution of [1m, 2m, 3m], each thread sleeping 1000ms between each
+read/write:
 
 ```
-$ chum -t webdav:127.0.0.1 -c 50 -d 1m,2m,3m -s 1000
+$ chum worker webdav -t 127.0.0.1:80 -c 50 -d 1m,2m,3m -s 1000
 ```
 
-`chum` defaults to using port 80 for WebDAV targets and port 9000 for S3
-targets. S3 client credentials default to the MinIO default client creds. These
+S3 client credentials default to the MinIO default client creds. These
 can be changed by setting the `AWS_SECRET_ACCESS_KEY` and `AWS_ACCESS_KEY_ID`
 environment variables.
 

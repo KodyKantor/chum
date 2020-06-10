@@ -25,8 +25,16 @@ pub const DIR: &str = "chum";
 
 #[derive(Clone)]
 pub struct WorkerOptions {
+    pub protocol: String,
     pub sync: bool,
     pub read_queue: bool,
+    pub operations: Vec<Operation>,
+    pub distribution: Vec<u64>,
+    pub target: String,
+    pub sleep: u64,
+    pub tx: Sender<Result<WorkerInfo, ChumError>>,
+    pub debug_tx: Option<Sender<State>>,
+    pub queue: Arc<Mutex<Queue<String>>>,
 }
 
 #[derive(Debug)]
@@ -123,6 +131,20 @@ impl std::fmt::Display for Operation {
     }
 }
 
+impl std::str::FromStr for Operation {
+    type Err = ChumError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "r" => Ok(Operation::Read),
+            "w" => Ok(Operation::Write),
+            "d" => Ok(Operation::Delete),
+            "e" => Ok(Operation::Error),
+            _ => Err(ChumError::new("invalid operation requested")),
+        }
+    }
+}
+
 pub trait Backend {
     fn write(&self) -> Result<Option<WorkerInfo>, ChumError>;
     fn read(&self) -> Result<Option<WorkerInfo>, ChumError>;
@@ -133,7 +155,7 @@ pub struct Worker {
     backend: Box<dyn Backend>,
     tx: Sender<Result<WorkerInfo, ChumError>>,
     pause: u64,
-    ops: Vec<String>,
+    ops: Vec<Operation>,
 }
 
 /*
@@ -145,19 +167,11 @@ pub struct Worker {
  */
 #[allow(clippy::too_many_arguments)]
 impl Worker {
-    pub fn new(
-        tx: Sender<Result<WorkerInfo, ChumError>>,
-        target: String,
-        distr: Vec<u64>,
-        pause: u64,
-        queue: Arc<Mutex<Queue<String>>>,
-        ops: Vec<String>,
-        dtx: Option<Sender<State>>,
-        wopts: WorkerOptions,
-    ) -> Worker {
-        let tok: Vec<&str> = target.split(':').collect();
-        let protocol = tok[0].to_ascii_lowercase(); /* e.g. 's3' or 'webdav'. */
-        let target = tok[1].to_string();
+    pub fn new(wopts: WorkerOptions) -> Worker {
+        let protocol = wopts.protocol.clone();
+        let pause = wopts.sleep;
+        let ops = wopts.operations.clone();
+        let tx = wopts.tx.clone();
 
         /*
          * Construct a client of the given type.
@@ -167,19 +181,9 @@ impl Worker {
          * we use it.
          */
         let backend: Box<dyn Backend> = match protocol.as_ref() {
-            "webdav" => Box::new(WebDav::new(
-                target,
-                distr,
-                Arc::clone(&queue),
-                dtx,
-                wopts,
-            )),
-            "s3" => {
-                Box::new(S3::new(target, distr, Arc::clone(&queue), dtx, wopts))
-            }
-            "fs" => {
-                Box::new(Fs::new(target, distr, Arc::clone(&queue), dtx, wopts))
-            }
+            "webdav" => Box::new(WebDav::new(wopts)),
+            "s3" => Box::new(S3::new(wopts)),
+            "fs" => Box::new(Fs::new(wopts)),
             _ => panic!("unknown client protocol"),
         };
 
@@ -217,11 +221,10 @@ impl Worker {
                 .ops
                 .choose(&mut rng)
                 .expect("choosing operation failed")
-                .as_ref()
             {
-                "r" => self.backend.read(),
-                "w" => self.backend.write(),
-                "d" => self.backend.delete(),
+                Operation::Read => self.backend.read(),
+                Operation::Write => self.backend.write(),
+                Operation::Delete => self.backend.delete(),
                 _ => panic!("unrecognized operator"),
             };
 

@@ -6,9 +6,6 @@
  * Copyright 2020 Joyent, Inc.
  */
 
-use std::sync::{Arc, Mutex};
-
-use crate::queue::Queue;
 use crate::state::State;
 use crate::utils::ChumError;
 use crate::worker::*;
@@ -23,7 +20,6 @@ use chrono::{DateTime, Utc};
 use std::fs::File;
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Instant;
 use std::vec::Vec;
@@ -31,22 +27,12 @@ use std::vec::Vec;
 use uuid::Uuid;
 
 pub struct Fs {
-    basedir: String,
-    distr: Arc<Vec<u64>>, /* object size distribution */
-    queue: Arc<Mutex<Queue<String>>>,
     buf: Vec<u8>,
-    dtx: Option<Sender<State>>,
     wopts: WorkerOptions,
 }
 
 impl Fs {
-    pub fn new(
-        basedir: String,
-        distr: Vec<u64>,
-        queue: Arc<Mutex<Queue<String>>>,
-        dtx: Option<Sender<State>>,
-        wopts: WorkerOptions,
-    ) -> Fs {
+    pub fn new(wopts: WorkerOptions) -> Fs {
         let mut rng = thread_rng();
 
         /*
@@ -59,14 +45,7 @@ impl Fs {
         let mut vec: Vec<u8> = Vec::new();
         vec.extend_from_slice(arr);
 
-        let fs = Fs {
-            basedir,
-            distr: Arc::new(distr),
-            queue: Arc::clone(&queue),
-            buf: vec,
-            dtx,
-            wopts,
-        };
+        let fs = Fs { buf: vec, wopts };
 
         fs.setup();
 
@@ -74,7 +53,7 @@ impl Fs {
     }
 
     fn setup(&self) {
-        let directory = &format!("{}/{}/v2/{}", self.basedir, DIR, DIR);
+        let directory = &format!("{}/{}/v2/{}", self.wopts.target, DIR, DIR);
         std::fs::create_dir_all(directory).expect(
             "failed to create \
              initial directory layout",
@@ -86,7 +65,7 @@ impl Fs {
         let first_digits = &fname[0..4];
         Path::new(&format!(
             "{}/{}/v2/{}/{}/{}",
-            self.basedir, DIR, DIR, first_digits, fname
+            self.wopts.target, DIR, DIR, first_digits, fname
         ))
         .to_path_buf()
     }
@@ -98,7 +77,7 @@ impl Fs {
         begin: DateTime<Utc>,
         end: DateTime<Utc>,
     ) {
-        if let Some(c) = &self.dtx {
+        if let Some(c) = &self.wopts.debug_tx {
             match c.send(State {
                 host: format!("{:?}", thread::current().id()),
                 state: state.to_owned(),
@@ -117,7 +96,8 @@ impl Backend for Fs {
         let fname = Uuid::new_v4();
         let mut rng = thread_rng();
         let size = *self
-            .distr
+            .wopts
+            .distribution
             .choose(&mut rng)
             .expect("choosing file size failed");
 
@@ -181,7 +161,11 @@ impl Backend for Fs {
                 Err(e) => Err(ChumError::new(&format!("fsync failed: {}", e))),
                 Ok(_) => {
                     if self.wopts.read_queue {
-                        self.queue.lock().unwrap().insert(fname.to_string());
+                        self.wopts
+                            .queue
+                            .lock()
+                            .unwrap()
+                            .insert(fname.to_string());
                     }
 
                     let rtt = rtt_start.elapsed().as_millis();
@@ -198,7 +182,7 @@ impl Backend for Fs {
                 }
             }
         } else {
-            self.queue.lock().unwrap().insert(fname.to_string());
+            self.wopts.queue.lock().unwrap().insert(fname.to_string());
 
             let rtt = rtt_start.elapsed().as_millis();
             Ok(Some(WorkerInfo {
@@ -214,7 +198,7 @@ impl Backend for Fs {
     fn read(&self) -> Result<Option<WorkerInfo>, ChumError> {
         let fname: String;
         {
-            let mut q = self.queue.lock().unwrap();
+            let mut q = self.wopts.queue.lock().unwrap();
             let qi = q.get();
             if qi.is_none() {
                 return Ok(None);
@@ -256,7 +240,7 @@ impl Backend for Fs {
     fn delete(&self) -> Result<Option<WorkerInfo>, ChumError> {
         let fname: String;
         {
-            let mut q = self.queue.lock().unwrap();
+            let mut q = self.wopts.queue.lock().unwrap();
             let qi = q.remove();
             if qi.is_none() {
                 return Ok(None);
@@ -276,7 +260,7 @@ impl Backend for Fs {
         self.send_state("delete::rm", begin, end);
 
         if let Err(e) = res {
-            self.queue.lock().unwrap().insert(fname.clone());
+            self.wopts.queue.lock().unwrap().insert(fname.clone());
 
             return Err(ChumError::new(&format!(
                 "Deleting {} \

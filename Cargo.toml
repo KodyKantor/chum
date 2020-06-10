@@ -5,7 +5,7 @@ authors = ["Kody Kantor <kody@kkantor.com>"]
 edition = "2018"
 
 [dependencies]
-getopts = "0.2"
+clap = "~2.33.0"
 rand = "0.6"
 regex = "1"
 uuid = { version = "0.8", features = ["v4"] }

@@ -16,7 +16,6 @@ use rand::Rng;
 use std::env;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc::Sender, Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 use std::vec::Vec;
@@ -30,28 +29,17 @@ use rusoto_s3::{
 
 use uuid::Uuid;
 
-use crate::queue::Queue;
-use crate::state::State;
 use crate::utils::ChumError;
 use crate::worker::{Backend, Operation, WorkerInfo, WorkerOptions, DIR};
 
 pub struct S3 {
-    distr: Arc<Vec<u64>>, /* object size distribution */
-    queue: Arc<Mutex<Queue<String>>>,
     buf: Vec<u8>,
     client: S3Client,
-    _dtx: Option<Sender<State>>,
     wopts: WorkerOptions,
 }
 
 impl S3 {
-    pub fn new(
-        target: String,
-        distr: Vec<u64>,
-        queue: Arc<Mutex<Queue<String>>>,
-        dtx: Option<Sender<State>>,
-        wopts: WorkerOptions,
-    ) -> S3 {
+    pub fn new(wopts: WorkerOptions) -> S3 {
         let mut rng = thread_rng();
 
         /*
@@ -77,7 +65,7 @@ impl S3 {
 
         let region = Region::Custom {
             name: "chum-s3".to_owned(),
-            endpoint: format!("http://{}:9000", target),
+            endpoint: format!("http://{}", wopts.target),
         };
 
         let client: S3Client = S3Client::new_with(
@@ -88,11 +76,8 @@ impl S3 {
         );
 
         let mut s3 = S3 {
-            distr: Arc::new(distr),
-            queue: Arc::clone(&queue),
             buf: vec,
             client,
-            _dtx: dtx,
             wopts,
         };
 
@@ -128,7 +113,8 @@ impl Backend for S3 {
 
         let mut rng = thread_rng();
         let size = *self
-            .distr
+            .wopts
+            .distribution
             .choose(&mut rng)
             .expect("choosing file size failed");
 
@@ -169,7 +155,7 @@ impl Backend for S3 {
             Err(e) => Err(ChumError::new(&e.to_string())),
             Ok(_) => {
                 if self.wopts.read_queue {
-                    self.queue.lock().unwrap().insert(fname.to_string());
+                    self.wopts.queue.lock().unwrap().insert(fname.to_string());
                 }
 
                 let rtt = rtt_start.elapsed().as_millis();
@@ -191,7 +177,7 @@ impl Backend for S3 {
          */
         let full_path: String;
         {
-            let mut q = self.queue.lock().unwrap();
+            let mut q = self.wopts.queue.lock().unwrap();
             let qi = q.get();
             if qi.is_none() {
                 return Ok(None);
@@ -246,7 +232,7 @@ impl Backend for S3 {
         let full_path: String;
         let fname: String;
         {
-            let mut q = self.queue.lock().unwrap();
+            let mut q = self.wopts.queue.lock().unwrap();
             let qi = q.remove();
             if qi.is_none() {
                 return Ok(None);
@@ -275,7 +261,7 @@ impl Backend for S3 {
          * operations if there was an error during the delete.
          */
         if let Err(e) = res {
-            self.queue.lock().unwrap().insert(fname);
+            self.wopts.queue.lock().unwrap().insert(fname);
 
             return Err(ChumError::new(&format!(
                 "Deleting {} failed: {}",
