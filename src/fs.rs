@@ -106,6 +106,7 @@ impl Backend for Fs {
         let mut end: DateTime<Utc>;
 
         begin = Utc::now();
+        let rtt_start = Instant::now();
         if let Err(_e) = std::fs::create_dir(
             full_path.parent().expect("directory creation failed"),
         ) {
@@ -141,7 +142,6 @@ impl Backend for Fs {
             bytes_to_go -= self.buf.len() as u64;
         }
 
-        let rtt_start = Instant::now();
 
         /*
          * Write the data to the file and then optionally issue an fsync.

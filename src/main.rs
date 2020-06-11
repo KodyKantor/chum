@@ -211,9 +211,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         None => match protocol_args.value_of("max-data") {
             Some(m) => {
-                let capnum = m
-                    .parse::<u64>()
-                    .expect("max-data should be a positive number");
+                let capnum = parse_human(&m)?;
                 Some(DataCap::LogicalData(capnum))
             }
             None => None,
@@ -304,6 +302,7 @@ fn main() -> Result<(), Box<dyn Error>> {
      * through the channel.
      */
     drop(debug_tx);
+    drop(workeropts);
 
     /*
      * When the stat thread exits we know that enough data was written.
