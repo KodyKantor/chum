@@ -223,7 +223,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let q: Arc<Mutex<Queue<String>>> =
         Arc::new(Mutex::new(Queue::new(DEF_QUEUE_MODE)));
-    let sync = !matches.is_present("no-sync");
+    let sync = matches.is_present("no-sync");
 
     let targ = target.to_string();
     let proto = protocol_name.to_string();
