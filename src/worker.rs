@@ -26,7 +26,6 @@ pub const DIR: &str = "chum";
 #[derive(Clone)]
 pub struct WorkerOptions {
     pub protocol: String,
-    pub sync: bool,
     pub read_queue: bool,
     pub operations: Vec<Operation>,
     pub distribution: Vec<u64>,
@@ -35,6 +34,12 @@ pub struct WorkerOptions {
     pub tx: Sender<Result<WorkerInfo, ChumError>>,
     pub debug_tx: Option<Sender<State>>,
     pub queue: Arc<Mutex<Queue<String>>>,
+
+    /* FS worker. */
+    pub sync: bool,
+
+    /* WebDAV worker. */
+    pub http2: bool,
 }
 
 #[derive(Debug)]

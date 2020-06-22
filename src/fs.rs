@@ -142,7 +142,6 @@ impl Backend for Fs {
             bytes_to_go -= self.buf.len() as u64;
         }
 
-
         /*
          * Write the data to the file and then optionally issue an fsync.
          *

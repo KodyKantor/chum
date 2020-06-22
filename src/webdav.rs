@@ -7,7 +7,7 @@
  */
 
 use crate::utils::ChumError;
-use crate::worker::{Backend, Operation, WorkerInfo, WorkerOptions, DIR};
+use crate::worker::{Backend, Operation, WorkerInfo, WorkerOptions};
 
 use curl::easy::Easy;
 use uuid::Uuid;
@@ -43,11 +43,7 @@ impl WebDav {
     }
 
     pub fn get_path(&self, fname: String) -> String {
-        let first_two = &fname[0..2];
-        format!(
-            "http://{}/{}/v2/{}/{}/{}",
-            self.wopts.target, DIR, DIR, first_two, fname
-        )
+        format!("http://{}/api/v1/object/{}", self.wopts.target, fname)
     }
 }
 
@@ -58,6 +54,9 @@ impl Backend for WebDav {
          * has some weird internal mutability.
          */
         let mut client = Easy::new();
+        if self.wopts.http2 {
+            client.http_version(curl::easy::HttpVersion::V2PriorKnowledge)?;
+        }
 
         let mut rng = thread_rng();
 
@@ -101,9 +100,11 @@ impl Backend for WebDav {
         /*
          * We get a 201 when the file is new, and a 204 when a file
          * is overwritten. Everything else is unexpected.
+         *
+         * Also some servers use 200 instead of 201/204.
          */
         let code = client.response_code()?;
-        if code == 201 || code == 204 {
+        if code == 201 || code == 204 || code == 200 {
             /*
              * XXX want to use .as_secs_f64() or similar once we can move
              * to rust 1.38+

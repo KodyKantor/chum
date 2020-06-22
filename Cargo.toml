@@ -9,7 +9,7 @@ clap = "~2.33.0"
 rand = "0.6"
 regex = "1"
 uuid = { version = "0.8", features = ["v4"] }
-curl = "0.4"
+curl = { version = "0.4", features = ["http2"] }
 rusoto_s3 = "0.42.0"
 rusoto_core = "0.42.0"
 rusoto_credential = "0.42.0"

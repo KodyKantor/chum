@@ -52,6 +52,10 @@ fn get_fs_args<'a, 'b>() -> Vec<Arg<'a, 'b>> {
     ]
 }
 
+fn get_webdav_args<'a, 'b>() -> Vec<Arg<'a, 'b>> {
+    vec![Arg::with_name("http2").help("use HTTP/2").long("http2")]
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     /*
      * Options shared by all worker backends.
@@ -130,7 +134,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let webdav = SubCommand::with_name("webdav")
         .about("webdav mode")
-        .args(&shared_args);
+        .args(&shared_args)
+        .args(&get_webdav_args());
 
     let s3 = SubCommand::with_name("s3")
         .about("s3 mode")
@@ -149,8 +154,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .about("cross-protocol storage testing tool")
         .subcommand(worker)
         /*
-         * .subcommand(slave)
-         * .subcommand(master)
+         * .subcommand(instructor)
+         * .subcommand(pupil)
          */
         .get_matches();
 
@@ -223,7 +228,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let q: Arc<Mutex<Queue<String>>> =
         Arc::new(Mutex::new(Queue::new(DEF_QUEUE_MODE)));
-    let sync = matches.is_present("no-sync");
+    let sync = !protocol_args.is_present("no-sync");
+    let http2 = protocol_args.is_present("http2");
 
     let targ = target.to_string();
     let proto = protocol_name.to_string();
@@ -268,7 +274,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (tx, rx) = channel();
     let workeropts = WorkerOptions {
         protocol: protocol_name.to_string(),
-        sync,
         read_queue: ops.contains(&Operation::Read)
             || ops.contains(&Operation::Delete),
         operations: ops,
@@ -278,6 +283,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         tx,
         debug_tx: debug_tx.clone(),
         queue: q,
+        sync,
+        http2,
     };
 
     let mut worker_threads: Vec<JoinHandle<_>> = Vec::new();
