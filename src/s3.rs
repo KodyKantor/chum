@@ -107,7 +107,7 @@ impl S3 {
 }
 
 impl Backend for S3 {
-    fn write(&self) -> Result<Option<WorkerInfo>, ChumError> {
+    fn write(&mut self) -> Result<Option<WorkerInfo>, ChumError> {
         /* This should be similar to how muskie generates objectids. */
         let fname = Uuid::new_v4();
 
@@ -170,7 +170,7 @@ impl Backend for S3 {
         }
     }
 
-    fn read(&self) -> Result<Option<WorkerInfo>, ChumError> {
+    fn read(&mut self) -> Result<Option<WorkerInfo>, ChumError> {
         /*
          * Create a scope here to ensure that we don't keep the queue locked
          * for longer than necessary.
@@ -228,7 +228,7 @@ impl Backend for S3 {
         }))
     }
 
-    fn delete(&self) -> Result<Option<WorkerInfo>, ChumError> {
+    fn delete(&mut self) -> Result<Option<WorkerInfo>, ChumError> {
         let full_path: String;
         let fname: String;
         {

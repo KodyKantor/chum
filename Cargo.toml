@@ -16,3 +16,4 @@ rusoto_credential = "0.42.0"
 statemap = { git = "https://github.com/kodykantor/rust-statemap" }
 chrono = "0.4"
 fs3 = "0.5.0"
+libc = "0.2"

@@ -151,9 +151,9 @@ impl std::str::FromStr for Operation {
 }
 
 pub trait Backend {
-    fn write(&self) -> Result<Option<WorkerInfo>, ChumError>;
-    fn read(&self) -> Result<Option<WorkerInfo>, ChumError>;
-    fn delete(&self) -> Result<Option<WorkerInfo>, ChumError>;
+    fn write(&mut self) -> Result<Option<WorkerInfo>, ChumError>;
+    fn read(&mut self) -> Result<Option<WorkerInfo>, ChumError>;
+    fn delete(&mut self) -> Result<Option<WorkerInfo>, ChumError>;
 }
 
 pub struct Worker {

@@ -48,7 +48,7 @@ impl WebDav {
 }
 
 impl Backend for WebDav {
-    fn write(&self) -> Result<Option<WorkerInfo>, ChumError> {
+    fn write(&mut self) -> Result<Option<WorkerInfo>, ChumError> {
         /*
          * XXX it would be great if we could re-use our client, but libcurl
          * has some weird internal mutability.
@@ -130,7 +130,7 @@ impl Backend for WebDav {
         }
     }
 
-    fn read(&self) -> Result<Option<WorkerInfo>, ChumError> {
+    fn read(&mut self) -> Result<Option<WorkerInfo>, ChumError> {
         let mut client = Easy::new();
         let fname: String;
 
@@ -179,7 +179,7 @@ impl Backend for WebDav {
             )))
         }
     }
-    fn delete(&self) -> Result<Option<WorkerInfo>, ChumError> {
+    fn delete(&mut self) -> Result<Option<WorkerInfo>, ChumError> {
         Err(ChumError::new(
             "'delete' not implemented for WebDAV backends.",
         ))

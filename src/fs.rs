@@ -15,7 +15,7 @@ use rand::thread_rng;
 use rand::AsByteSliceMut;
 use rand::Rng;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, Datelike};
 
 use std::fs::File;
 use std::io::{BufWriter, Read, Write};
@@ -26,8 +26,12 @@ use std::vec::Vec;
 
 use uuid::Uuid;
 
+const DEF_MAX_DIRENTS: u64 = 10_000;
+
 pub struct Fs {
     buf: Vec<u8>,
+    obj_cnt_dir: u64,
+    dir_shard: u32,
     wopts: WorkerOptions,
 }
 
@@ -45,27 +49,21 @@ impl Fs {
         let mut vec: Vec<u8> = Vec::new();
         vec.extend_from_slice(arr);
 
-        let fs = Fs { buf: vec, wopts };
-
-        fs.setup();
-
-        fs
-    }
-
-    fn setup(&self) {
-        let directory = &format!("{}/{}/v2/{}", self.wopts.target, DIR, DIR);
-        std::fs::create_dir_all(directory).expect(
-            "failed to create \
-             initial directory layout",
-        );
+        Fs { buf: vec, obj_cnt_dir: 0, dir_shard: 0, wopts }
     }
 
     /* Common function to handle creating filesystem path. */
-    fn get_path(&self, fname: String) -> PathBuf {
-        let first_digits = &fname[0..4];
+    fn get_path(&mut self, fname: String) -> PathBuf {
+        let today = Utc::today();
+        self.obj_cnt_dir += 1;
+        if self.obj_cnt_dir > DEF_MAX_DIRENTS {
+            self.obj_cnt_dir = 0;
+            self.dir_shard += 1;
+        }
         Path::new(&format!(
-            "{}/{}/v2/{}/{}/{}",
-            self.wopts.target, DIR, DIR, first_digits, fname
+            "{}/{}/{}{}/{}/{}",
+            self.wopts.target, today.year(), today.month(), today.day(),
+            self.dir_shard, fname
         ))
         .to_path_buf()
     }
@@ -92,7 +90,7 @@ impl Fs {
 }
 
 impl Backend for Fs {
-    fn write(&self) -> Result<Option<WorkerInfo>, ChumError> {
+    fn write(&mut self) -> Result<Option<WorkerInfo>, ChumError> {
         let fname = Uuid::new_v4();
         let mut rng = thread_rng();
         let size = *self
@@ -107,9 +105,9 @@ impl Backend for Fs {
 
         begin = Utc::now();
         let rtt_start = Instant::now();
-        if let Err(_e) = std::fs::create_dir(
-            full_path.parent().expect("directory creation failed"),
-        ) {
+        if let Err(_e) = std::fs::create_dir_all(&full_path.parent()
+            .expect("couldn't retrieve parent dir")) {
+
             /*
              * One of three cases:
              * - lack permission to create directory
@@ -127,6 +125,18 @@ impl Backend for Fs {
         let file = File::create(full_path)?;
         end = Utc::now();
         self.send_state("write::open", begin, end);
+
+        /*
+         * Add fallocate support?
+         *
+         * #[cfg(target_os = "linux")]
+         * {
+         *     let ret = unsafe {
+         *         libc::fallocate(
+         *             file.as_raw_fd(), libc::FALLOC_FL_KEEP_SIZE, 0, size);
+         *     };
+         * }
+         */
 
         let mut bw = BufWriter::new(&file);
 
@@ -194,7 +204,7 @@ impl Backend for Fs {
         }
     }
 
-    fn read(&self) -> Result<Option<WorkerInfo>, ChumError> {
+    fn read(&mut self) -> Result<Option<WorkerInfo>, ChumError> {
         let fname: String;
         {
             let mut q = self.wopts.queue.lock().unwrap();
@@ -236,7 +246,7 @@ impl Backend for Fs {
         }))
     }
 
-    fn delete(&self) -> Result<Option<WorkerInfo>, ChumError> {
+    fn delete(&mut self) -> Result<Option<WorkerInfo>, ChumError> {
         let fname: String;
         {
             let mut q = self.wopts.queue.lock().unwrap();
