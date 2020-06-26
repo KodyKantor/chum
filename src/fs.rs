@@ -15,7 +15,7 @@ use rand::thread_rng;
 use rand::AsByteSliceMut;
 use rand::Rng;
 
-use chrono::{DateTime, Utc, Datelike};
+use chrono::{DateTime, Datelike, Utc};
 
 use std::fs::File;
 use std::io::{BufWriter, Read, Write};
@@ -49,7 +49,12 @@ impl Fs {
         let mut vec: Vec<u8> = Vec::new();
         vec.extend_from_slice(arr);
 
-        Fs { buf: vec, obj_cnt_dir: 0, dir_shard: 0, wopts }
+        Fs {
+            buf: vec,
+            obj_cnt_dir: 0,
+            dir_shard: 0,
+            wopts,
+        }
     }
 
     /* Common function to handle creating filesystem path. */
@@ -62,8 +67,12 @@ impl Fs {
         }
         Path::new(&format!(
             "{}/{}/{}{}/{}/{}",
-            self.wopts.target, today.year(), today.month(), today.day(),
-            self.dir_shard, fname
+            self.wopts.target,
+            today.year(),
+            today.month(),
+            today.day(),
+            self.dir_shard,
+            fname
         ))
         .to_path_buf()
     }
@@ -105,8 +114,9 @@ impl Backend for Fs {
 
         begin = Utc::now();
         let rtt_start = Instant::now();
-        if let Err(_e) = std::fs::create_dir_all(&full_path.parent()
-            .expect("couldn't retrieve parent dir")) {
+        if let Err(_e) = std::fs::create_dir_all(
+            &full_path.parent().expect("couldn't retrieve parent dir"),
+        ) {
 
             /*
              * One of three cases:

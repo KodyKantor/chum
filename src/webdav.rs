@@ -9,7 +9,7 @@
 use crate::utils::ChumError;
 use crate::worker::{Backend, Operation, WorkerInfo, WorkerOptions};
 
-use curl::easy::Easy;
+use curl::easy::{Easy, HttpVersion};
 use uuid::Uuid;
 
 use rand::seq::SliceRandom;
@@ -22,6 +22,7 @@ use std::vec::Vec;
 
 pub struct WebDav {
     buf: Vec<u8>,
+    client: Easy,
     wopts: WorkerOptions,
 }
 
@@ -39,31 +40,28 @@ impl WebDav {
         let mut vec: Vec<u8> = Vec::new();
         vec.extend_from_slice(arr);
 
-        WebDav { buf: vec, wopts }
-    }
+        let mut client = Easy::new();
+        if wopts.http2 {
+            client.http_version(HttpVersion::V2PriorKnowledge).unwrap();
+        }
 
-    pub fn get_path(&self, fname: String) -> String {
-        format!("http://{}/api/v1/object/{}", self.wopts.target, fname)
+        WebDav {
+            buf: vec,
+            client,
+            wopts,
+        }
     }
 }
 
 impl Backend for WebDav {
     fn write(&mut self) -> Result<Option<WorkerInfo>, ChumError> {
-        /*
-         * XXX it would be great if we could re-use our client, but libcurl
-         * has some weird internal mutability.
-         */
-        let mut client = Easy::new();
-        if self.wopts.http2 {
-            client.http_version(curl::easy::HttpVersion::V2PriorKnowledge)?;
-        }
-
+        let client = &mut self.client;
         let mut rng = thread_rng();
 
         /* This should be similar to how muskie generates objectids. */
         let fname = Uuid::new_v4();
 
-        let full_path = self.get_path(fname.to_string());
+        let full_path = get_path(self.wopts.target.clone(), fname.to_string());
 
         /* Randomly choose a file size from the list. */
         let size = *self
@@ -87,11 +85,12 @@ impl Backend for WebDav {
          * We don't currently borrow anything and use it again later, but
          * this might make future-me less frustrated.
          */
+        let b = self.buf.clone();
         {
             let mut transfer = client.transfer();
             transfer.read_function(|into| {
                 /* This should be memcpy, thus pretty fast. */
-                into.copy_from_slice(&self.buf);
+                into.copy_from_slice(&b);
                 Ok(into.len())
             })?;
             transfer.perform()?;
@@ -131,7 +130,7 @@ impl Backend for WebDav {
     }
 
     fn read(&mut self) -> Result<Option<WorkerInfo>, ChumError> {
-        let mut client = Easy::new();
+        let client = &mut self.client;
         let fname: String;
 
         /*
@@ -147,7 +146,7 @@ impl Backend for WebDav {
             let qi = qi.unwrap();
 
             fname = qi.clone();
-            client.url(&self.get_path(fname.clone()))?;
+            client.url(&get_path(self.wopts.target.clone(), fname.clone()))?;
         }
         client.get(true)?;
 
@@ -179,9 +178,53 @@ impl Backend for WebDav {
             )))
         }
     }
+
     fn delete(&mut self) -> Result<Option<WorkerInfo>, ChumError> {
-        Err(ChumError::new(
-            "'delete' not implemented for WebDAV backends.",
-        ))
+        let client = &mut self.client;
+        let fname: String;
+
+        /*
+         * Create a scope here to ensure that we don't keep the queue locked
+         * for longer than necessary.
+         */
+        {
+            let mut q = self.wopts.queue.lock().unwrap();
+            let qi = q.get();
+            if qi.is_none() {
+                return Ok(None);
+            }
+            let qi = qi.unwrap();
+
+            fname = qi.clone();
+            client.url(&get_path(self.wopts.target.clone(), fname.clone()))?;
+        }
+
+        client.custom_request("DELETE")?;
+        client.perform()?;
+
+        let code = client.response_code()?;
+        if code == 200 {
+            let ttfb = client.starttransfer_time()?.as_millis();
+            let rtt = client.total_time()?.as_millis();
+            Ok(Some(WorkerInfo {
+                id: thread::current().id(),
+                op: Operation::Delete,
+                size: 0,
+                ttfb,
+                rtt,
+            }))
+        } else {
+            Err(ChumError::new(&format!(
+                "Deleting {} failed: {}",
+                fname, code
+            )))
+        }
     }
+}
+
+/*
+ * Abstract away the path munging.
+ */
+fn get_path(target: String, fname: String) -> String {
+    format!("http://{}/api/v1/object/{}", target, fname)
 }
