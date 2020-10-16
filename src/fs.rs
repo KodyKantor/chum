@@ -26,7 +26,7 @@ use std::vec::Vec;
 
 use uuid::Uuid;
 
-const DEF_MAX_DIRENTS: u64 = 10_000;
+const DEF_MAX_DIRENTS: u64 = 100_000;
 
 pub struct Fs {
     buf: Vec<u8>,
