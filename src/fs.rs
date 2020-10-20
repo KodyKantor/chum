@@ -132,9 +132,11 @@ impl Backend for Fs {
         self.send_state("write::mkdir", begin, end);
 
         begin = Utc::now();
-        let file = File::create(full_path)?;
+        let file = File::create(&full_path)?;
         end = Utc::now();
         self.send_state("write::open", begin, end);
+
+        let p = full_path.into_os_string().into_string().expect("failed to convert path to string");
 
         /*
          * Add fallocate support?
@@ -184,7 +186,7 @@ impl Backend for Fs {
                             .queue
                             .lock()
                             .unwrap()
-                            .insert(fname.to_string());
+                            .insert(p)
                     }
 
                     let rtt = rtt_start.elapsed().as_millis();
@@ -201,7 +203,7 @@ impl Backend for Fs {
                 }
             }
         } else {
-            self.wopts.queue.lock().unwrap().insert(fname.to_string());
+            self.wopts.queue.lock().unwrap().insert(p);
 
             let rtt = rtt_start.elapsed().as_millis();
             Ok(Some(WorkerInfo {
@@ -232,11 +234,9 @@ impl Backend for Fs {
 
         let rtt_start = Instant::now();
 
-        let full_path = self.get_path(fname);
-
         let mut buf = Vec::new();
         begin = Utc::now();
-        let mut file = File::open(full_path)?;
+        let mut file = File::open(fname)?;
         end = Utc::now();
         self.send_state("read::open", begin, end);
 
@@ -272,9 +272,7 @@ impl Backend for Fs {
         begin = Utc::now();
         let rtt_start = Instant::now();
 
-        let full_path = self.get_path(fname.to_string());
-
-        let res = std::fs::remove_file(full_path);
+        let res = std::fs::remove_file(&fname);
         end = Utc::now();
         self.send_state("delete::rm", begin, end);
 
